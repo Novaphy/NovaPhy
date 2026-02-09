@@ -5,8 +5,13 @@ add_library(novaphy_core STATIC
     math/math_utils.cpp
     core/body.cpp
     core/shape.cpp
+    core/model_builder.cpp
     collision/broadphase.cpp
     collision/narrowphase.cpp
+    dynamics/integrator.cpp
+    dynamics/free_body_solver.cpp
+    sim/state.cpp
+    sim/world.cpp
 )
 
 target_include_directories(novaphy_core PUBLIC

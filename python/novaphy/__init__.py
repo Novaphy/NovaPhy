@@ -22,6 +22,12 @@ from novaphy._core import (
     BroadPhasePair,
     SweepAndPrune,
     collide_shapes,
+    # Simulation
+    ModelBuilder,
+    Model,
+    SolverSettings,
+    SimState,
+    World,
 )
 
 __version__ = version()
@@ -44,4 +50,9 @@ __all__ = [
     "BroadPhasePair",
     "SweepAndPrune",
     "collide_shapes",
+    "ModelBuilder",
+    "Model",
+    "SolverSettings",
+    "SimState",
+    "World",
 ]

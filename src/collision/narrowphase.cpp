@@ -58,11 +58,11 @@ bool collide_sphere_plane(const CollisionShape& sphere_shape, const Transform& t
     if (distance > radius) return false;
 
     ContactPoint cp;
-    cp.normal = n;
+    cp.normal = n;  // points from plane toward sphere (away from plane surface)
     cp.penetration = radius - distance;
     cp.position = center - n * distance;
-    cp.body_a = sphere_shape.body_index;
-    cp.body_b = plane_shape.body_index;
+    cp.body_a = plane_shape.body_index;   // plane is body_a
+    cp.body_b = sphere_shape.body_index;  // sphere is body_b
     cp.friction = combine_friction(sphere_shape.friction, plane_shape.friction);
     cp.restitution = combine_restitution(sphere_shape.restitution, plane_shape.restitution);
     contacts.push_back(cp);
@@ -149,11 +149,11 @@ bool collide_box_plane(const CollisionShape& box_shape, const Transform& tb,
 
         if (distance < 0.0f) {
             ContactPoint cp;
-            cp.normal = n;
+            cp.normal = n;  // points from plane toward box (away from plane surface)
             cp.penetration = -distance;
             cp.position = world_corner - n * distance;
-            cp.body_a = box_shape.body_index;
-            cp.body_b = plane_shape.body_index;
+            cp.body_a = plane_shape.body_index;   // plane is body_a
+            cp.body_b = box_shape.body_index;     // box is body_b
             cp.friction = combine_friction(box_shape.friction, plane_shape.friction);
             cp.restitution = combine_restitution(box_shape.restitution, plane_shape.restitution);
             contacts.push_back(cp);
@@ -338,13 +338,7 @@ bool collide_shapes(const CollisionShape& a, const Transform& ta,
         return narrowphase::collide_sphere_plane(a, ta, b, contacts);
     }
     if (typeA == ShapeType::Plane && typeB == ShapeType::Sphere) {
-        bool r = narrowphase::collide_sphere_plane(b, tb, a, contacts);
-        // Flip normal for correct body ordering
-        for (auto& cp : contacts) {
-            cp.normal = -cp.normal;
-            std::swap(cp.body_a, cp.body_b);
-        }
-        return r;
+        return narrowphase::collide_sphere_plane(b, tb, a, contacts);
     }
     // Box-Sphere
     if (typeA == ShapeType::Box && typeB == ShapeType::Sphere) {
@@ -363,12 +357,7 @@ bool collide_shapes(const CollisionShape& a, const Transform& ta,
         return narrowphase::collide_box_plane(a, ta, b, contacts);
     }
     if (typeA == ShapeType::Plane && typeB == ShapeType::Box) {
-        bool r = narrowphase::collide_box_plane(b, tb, a, contacts);
-        for (auto& cp : contacts) {
-            cp.normal = -cp.normal;
-            std::swap(cp.body_a, cp.body_b);
-        }
-        return r;
+        return narrowphase::collide_box_plane(b, tb, a, contacts);
     }
     // Box-Box
     if (typeA == ShapeType::Box && typeB == ShapeType::Box) {
