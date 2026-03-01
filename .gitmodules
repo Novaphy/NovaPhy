@@ -1,0 +1,3 @@
+[submodule "external/libuipc"]
+	path = external/libuipc
+	url = https://github.com/spiriMirror/libuipc.git

@@ -43,6 +43,12 @@ nul
 .env
 *.egg
 
+# External dependencies build artifacts
+external/libuipc/build/
+
+# IPC runtime workspace (libuipc solver output)
+ipc_workspace/
+
 #gui
 .polyscope.ini
 imgui.ini

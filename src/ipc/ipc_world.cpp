@@ -1,0 +1,336 @@
+#include "novaphy/ipc/ipc_world.h"
+#include "novaphy/ipc/shape_converter.h"
+
+// libuipc headers (C++20)
+#include <uipc/uipc.h>
+#include <uipc/constitution/affine_body_constitution.h>
+#include <uipc/geometry/utils.h>
+#include <uipc/common/unit.h>
+
+#include <stdexcept>
+#include <filesystem>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
+namespace novaphy {
+
+// ---- Pimpl implementation ----
+
+struct IPCWorld::Impl {
+    Model model;
+    IPCConfig config;
+    SimState state;
+    int frame_count = 0;
+
+    // libuipc objects
+    std::unique_ptr<uipc::core::Engine> engine;
+    std::unique_ptr<uipc::core::World> world;
+    std::unique_ptr<uipc::core::Scene> scene;
+
+    // Track which NovaPhy body index maps to which libuipc object ID,
+    // and which geometry slot IDs to read back from.
+    struct BodyMapping {
+        int novaphy_body_idx;
+        uipc::IndexT object_id;
+        uipc::IndexT geometry_id;
+    };
+    std::vector<BodyMapping> body_mappings;
+
+    void init();
+    void convert_bodies();
+    void advance_and_retrieve();
+};
+
+// ---- Helper: convert NovaPhy Transform to libuipc Matrix4x4 ----
+
+static uipc::Matrix4x4 to_uipc_transform(const Transform& tf) {
+    Eigen::Matrix4d m = Eigen::Matrix4d::Identity();
+    Eigen::Matrix3d rot = tf.rotation.cast<double>().toRotationMatrix();
+    m.block<3, 3>(0, 0) = rot;
+    m(0, 3) = static_cast<double>(tf.position.x());
+    m(1, 3) = static_cast<double>(tf.position.y());
+    m(2, 3) = static_cast<double>(tf.position.z());
+    return m;
+}
+
+// ---- Helper: extract NovaPhy Transform from libuipc Matrix4x4 ----
+
+static Transform from_uipc_transform(const uipc::Matrix4x4& m) {
+    Eigen::Matrix3d rot = m.block<3, 3>(0, 0);
+    Eigen::Quaterniond qd(rot);
+    Vec3f pos(static_cast<float>(m(0, 3)),
+              static_cast<float>(m(1, 3)),
+              static_cast<float>(m(2, 3)));
+    Quatf qf(static_cast<float>(qd.w()),
+              static_cast<float>(qd.x()),
+              static_cast<float>(qd.y()),
+              static_cast<float>(qd.z()));
+    return Transform(pos, qf);
+}
+
+void IPCWorld::Impl::init() {
+    using namespace uipc;
+    using namespace uipc::core;
+    using namespace uipc::geometry;
+
+    // Initialize libuipc with module_dir pointing to backend DLLs.
+    // Find the directory containing uipc_core by querying the loaded DLL path.
+    {
+        auto uipc_cfg = uipc::default_config();
+        std::string module_dir;
+#ifdef _WIN32
+        HMODULE hmod = GetModuleHandleA("uipc_core.dll");
+        if (hmod) {
+            char path[MAX_PATH];
+            if (GetModuleFileNameA(hmod, path, MAX_PATH) > 0) {
+                module_dir = std::filesystem::path(path).parent_path().string();
+            }
+        }
+#endif
+        if (module_dir.empty()) {
+            // Fallback: use workspace or current directory
+            module_dir = ".";
+        }
+        uipc_cfg["module_dir"] = module_dir;
+
+        // Ensure the module directory is in the DLL search path so that
+        // LoadLibrary can resolve transitive dependencies (e.g. uipc_sanity_check
+        // depends on uipc_core, spdlog, fmt, etc. in the same directory).
+#ifdef _WIN32
+        if (!module_dir.empty() && module_dir != ".") {
+            SetDllDirectoryA(module_dir.c_str());
+        }
+#endif
+        uipc::init(uipc_cfg);
+    }
+
+    // Create engine
+    engine = std::make_unique<Engine>(config.backend, config.workspace);
+
+    // Create world
+    world = std::make_unique<World>(*engine);
+
+    // Configure scene
+    auto scene_config = Scene::default_config();
+    scene_config["gravity"] = Vector3{
+        static_cast<double>(config.gravity.x()),
+        static_cast<double>(config.gravity.y()),
+        static_cast<double>(config.gravity.z())
+    };
+    scene_config["dt"] = static_cast<double>(config.dt);
+
+    scene = std::make_unique<Scene>(scene_config);
+
+    // Initialize NovaPhy SimState
+    state.init(model.num_bodies(), model.initial_transforms);
+
+    // Convert bodies to libuipc
+    convert_bodies();
+
+    // Init the libuipc world with the scene
+    world->init(*scene);
+}
+
+void IPCWorld::Impl::convert_bodies() {
+    using namespace uipc;
+    using namespace uipc::core;
+    using namespace uipc::geometry;
+    using namespace uipc::constitution;
+
+    // Setup constitution
+    AffineBodyConstitution abd;
+    scene->constitution_tabular().insert(abd);
+
+    // Setup default contact model
+    scene->contact_tabular().default_model(
+        static_cast<Float>(config.friction),
+        static_cast<Float>(config.contact_resistance)
+    );
+    auto default_element = scene->contact_tabular().default_element();
+
+    // Group shapes by body_index
+    // body_index -> vector of shape indices
+    std::unordered_map<int, std::vector<int>> body_shapes;
+    for (int si = 0; si < model.num_shapes(); ++si) {
+        const auto& shape = model.shapes[si];
+        if (shape.type == ShapeType::Plane) {
+            // Handle planes separately as implicit geometry
+            auto ground_geo = ground(
+                static_cast<Float>(shape.plane.offset),
+                Vector3{
+                    static_cast<double>(shape.plane.normal.x()),
+                    static_cast<double>(shape.plane.normal.y()),
+                    static_cast<double>(shape.plane.normal.z())
+                }
+            );
+            auto obj = scene->objects().create("ground_plane");
+            obj->geometries().create(ground_geo);
+            continue;
+        }
+        body_shapes[shape.body_index].push_back(si);
+    }
+
+    // Convert each body
+    for (int bi = 0; bi < model.num_bodies(); ++bi) {
+        const auto& body = model.bodies[bi];
+        const auto& transform = model.initial_transforms[bi];
+
+        auto it = body_shapes.find(bi);
+        if (it == body_shapes.end()) continue;  // body has no shapes
+
+        // Merge all shapes for this body into a single tetmesh.
+        // Each shape's vertices are transformed by its local_transform
+        // before merging, so the combined mesh is in body-local space.
+        std::vector<Vector3> verts;
+        std::vector<Vector4i> tets;
+
+        for (int shape_idx : it->second) {
+            const auto& shape = model.shapes[shape_idx];
+
+            TetMeshData tet_data;
+            switch (shape.type) {
+                case ShapeType::Box:
+                    tet_data = box_to_tetmesh(shape.box.half_extents);
+                    break;
+                case ShapeType::Sphere:
+                    tet_data = sphere_to_tetmesh(shape.sphere.radius, 1);
+                    break;
+                default:
+                    continue;  // skip unknown types
+            }
+
+            // Apply shape's local transform to vertices
+            Eigen::Matrix3d local_rot = shape.local_transform.rotation.cast<double>().toRotationMatrix();
+            Eigen::Vector3d local_pos = shape.local_transform.position.cast<double>();
+
+            int vert_offset = static_cast<int>(verts.size());
+            for (const auto& v : tet_data.vertices) {
+                verts.push_back(local_rot * v + local_pos);
+            }
+            for (const auto& t : tet_data.tetrahedra) {
+                tets.push_back(Vector4i(t[0] + vert_offset, t[1] + vert_offset,
+                                        t[2] + vert_offset, t[3] + vert_offset));
+            }
+        }
+
+        if (verts.empty()) continue;  // all shapes were unsupported types
+
+        // Create simplicial complex
+        SimplicialComplex mesh = tetmesh(verts, tets);
+
+        // Apply constitution (affine body)
+        Float body_kappa = static_cast<Float>(config.body_kappa);
+        Float density = static_cast<Float>(config.mass_density);
+        abd.apply_to(mesh, body_kappa, density);
+
+        // Apply contact model
+        default_element.apply_to(mesh);
+
+        // Label surface for contact detection
+        label_surface(mesh);
+        label_triangle_orient(mesh);
+
+        // Set initial transform via the instance transforms attribute
+        {
+            auto& xforms = mesh.transforms();
+            auto xform_view = view(xforms);
+            xform_view[0] = to_uipc_transform(transform);
+        }
+
+        // Mark static bodies (mass <= 0)
+        if (body.is_static()) {
+            auto is_fixed = mesh.instances().find<IndexT>(builtin::is_fixed);
+            auto fixed_view = view(*is_fixed);
+            fixed_view[0] = 1;
+        }
+
+        // Create libuipc object
+        std::string obj_name = "body_" + std::to_string(bi);
+        auto obj = scene->objects().create(obj_name);
+        auto geo_slots = obj->geometries().create(mesh);
+
+        // Record mapping for state retrieval
+        BodyMapping mapping;
+        mapping.novaphy_body_idx = bi;
+        mapping.object_id = obj->id();
+        mapping.geometry_id = obj->geometries().ids()[0];
+        body_mappings.push_back(mapping);
+    }
+}
+
+void IPCWorld::Impl::advance_and_retrieve() {
+    using namespace uipc;
+    using namespace uipc::geometry;
+
+    // Advance IPC simulation
+    world->advance();
+    world->sync();
+    world->retrieve();
+
+    frame_count++;
+
+    // Read back transforms and compute velocities via finite difference
+    float inv_dt = 1.0f / config.dt;
+
+    for (const auto& mapping : body_mappings) {
+        auto geo_slots = scene->geometries().find(mapping.object_id);
+        if (!geo_slots.geometry) continue;
+
+        auto* sc = dynamic_cast<SimplicialComplex*>(&geo_slots.geometry->geometry());
+        if (!sc) continue;
+
+        const auto& xforms = sc->transforms();
+        auto xform_view = xforms.view();
+        if (xform_view.empty()) continue;
+
+        int bi = mapping.novaphy_body_idx;
+        Transform prev = state.transforms[bi];
+        Transform curr = from_uipc_transform(xform_view[0]);
+        state.transforms[bi] = curr;
+
+        // Linear velocity: finite difference of position
+        state.linear_velocities[bi] = (curr.position - prev.position) * inv_dt;
+
+        // Angular velocity: from quaternion difference
+        // omega = 2 * (q_curr * q_prev^-1 - identity) / dt  (small angle approx)
+        Quatf dq = curr.rotation * prev.rotation.inverse();
+        // Ensure shortest path
+        if (dq.w() < 0.0f) {
+            dq.coeffs() = -dq.coeffs();
+        }
+        state.angular_velocities[bi] = Vec3f(dq.x(), dq.y(), dq.z()) * (2.0f * inv_dt);
+    }
+}
+
+// ---- IPCWorld public interface ----
+
+IPCWorld::IPCWorld(const Model& model, const IPCConfig& config)
+    : impl_(std::make_unique<Impl>())
+{
+    impl_->model = model;
+    impl_->config = config;
+    impl_->init();
+}
+
+IPCWorld::~IPCWorld() = default;
+
+IPCWorld::IPCWorld(IPCWorld&&) noexcept = default;
+IPCWorld& IPCWorld::operator=(IPCWorld&&) noexcept = default;
+
+void IPCWorld::step() {
+    impl_->advance_and_retrieve();
+}
+
+SimState& IPCWorld::state() { return impl_->state; }
+const SimState& IPCWorld::state() const { return impl_->state; }
+
+const Model& IPCWorld::model() const { return impl_->model; }
+
+const IPCConfig& IPCWorld::config() const { return impl_->config; }
+
+int IPCWorld::frame() const { return impl_->frame_count; }
+
+}  // namespace novaphy

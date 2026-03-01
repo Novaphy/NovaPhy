@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.15...4.0)
 
+# ---------- Optional IPC support via libuipc ----------
+# Must be declared before project() so vcpkg installs the 'ipc' feature deps.
+option(NOVAPHY_WITH_IPC "Build with libuipc IPC support (requires CUDA >= 12.4)" OFF)
+
+if(NOVAPHY_WITH_IPC)
+    list(APPEND VCPKG_MANIFEST_FEATURES "ipc")
+endif()
+
 project(
     ${SKBUILD_PROJECT_NAME}
     VERSION ${SKBUILD_PROJECT_VERSION}
@@ -18,6 +26,58 @@ find_package(pybind11 CONFIG REQUIRED)
 
 # Core C++ library
 add_subdirectory(src)
+
+if(NOVAPHY_WITH_IPC)
+    # CUDA is required by libuipc
+    include(CheckLanguage)
+    check_language(CUDA)
+    if(CMAKE_CUDA_COMPILER)
+        enable_language(CUDA)
+        if(CMAKE_CUDA_COMPILER_VERSION VERSION_LESS "12.4")
+            message(FATAL_ERROR "NOVAPHY_WITH_IPC requires CUDA >= 12.4, found ${CMAKE_CUDA_COMPILER_VERSION}")
+        endif()
+    else()
+        message(FATAL_ERROR "NOVAPHY_WITH_IPC requires CUDA, but no CUDA compiler was found")
+    endif()
+
+    # Configure libuipc: disable components we don't need
+    set(UIPC_BUILD_GUI OFF CACHE BOOL "" FORCE)
+    set(UIPC_BUILD_PYBIND OFF CACHE BOOL "" FORCE)
+    set(UIPC_BUILD_PYTHON_WHEEL OFF CACHE BOOL "" FORCE)
+    set(UIPC_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(UIPC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(UIPC_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+    set(UIPC_USING_LOCAL_VCPKG ON CACHE BOOL "" FORCE)
+
+    # Temporarily hide SKBUILD so libuipc doesn't force UIPC_BUILD_PYBIND=ON
+    if(DEFINED SKBUILD)
+        set(_NOVAPHY_SAVED_SKBUILD "${SKBUILD}")
+        unset(SKBUILD)
+        unset(SKBUILD CACHE)
+    endif()
+
+    add_subdirectory(external/libuipc EXCLUDE_FROM_ALL)
+
+    # Workaround: VS MSBuild generator doesn't propagate Eigen include dirs
+    # from transitive CMake targets to CudaCompile items in .cu files.
+    # Explicitly add Eigen's include directory to the cuda backend target.
+    if(TARGET cuda)
+        get_target_property(_eigen_inc Eigen3::Eigen INTERFACE_INCLUDE_DIRECTORIES)
+        if(_eigen_inc)
+            target_include_directories(cuda PRIVATE ${_eigen_inc})
+        endif()
+    endif()
+
+    # Restore SKBUILD for NovaPhy's own use
+    if(DEFINED _NOVAPHY_SAVED_SKBUILD)
+        set(SKBUILD "${_NOVAPHY_SAVED_SKBUILD}" CACHE STRING "" FORCE)
+    endif()
+    add_subdirectory(src/ipc)
+
+    message(STATUS "NovaPhy: IPC support ENABLED (CUDA ${CMAKE_CUDA_COMPILER_VERSION})")
+else()
+    message(STATUS "NovaPhy: IPC support DISABLED (set -DNOVAPHY_WITH_IPC=ON to enable)")
+endif()
 
 # Python bindings
 add_subdirectory(python/bindings)

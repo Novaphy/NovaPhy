@@ -5,5 +5,29 @@
     "dependencies": [
         "eigen3",
         "gtest"
+    ],
+    "features": {
+        "ipc": {
+            "description": "IPC support via libuipc (requires CUDA >= 12.4)",
+            "dependencies": [
+                "spdlog",
+                "fmt",
+                "nlohmann-json",
+                "libigl",
+                "cppitertools",
+                "dylib",
+                "magic-enum",
+                "tinygltf",
+                "tbb",
+                "catch2",
+                "urdfdom",
+                "cpptrace",
+                "octree"
+            ]
+        }
+    },
+    "overrides": [
+        { "name": "fmt", "version": "10.2.1" },
+        { "name": "spdlog", "version": "1.12.0" }
     ]
 }

@@ -22,6 +22,19 @@
                 },
                 "CMAKE_BUILD_TYPE": "Debug"
             }
+        },
+        {
+            "name": "ipc",
+            "displayName": "Release with IPC (libuipc + CUDA)",
+            "binaryDir": "${sourceDir}/build-ipc",
+            "cacheVariables": {
+                "CMAKE_TOOLCHAIN_FILE": {
+                    "type": "FILEPATH",
+                    "value": "F:/vcpkg/scripts/buildsystems/vcpkg.cmake"
+                },
+                "CMAKE_BUILD_TYPE": "Release",
+                "NOVAPHY_WITH_IPC": "ON"
+            }
         }
     ],
     "buildPresets": [
@@ -32,6 +45,10 @@
         {
             "name": "debug",
             "configurePreset": "debug"
+        },
+        {
+            "name": "ipc",
+            "configurePreset": "ipc"
         }
     ]
 }
