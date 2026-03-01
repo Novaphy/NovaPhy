@@ -15,7 +15,27 @@
       "Bash(CMAKE_ARGS=\"-DCMAKE_TOOLCHAIN_FILE=F:/vcpkg/scripts/buildsystems/vcpkg.cmake\" pip install:*)",
       "Bash(git reset:*)",
       "WebFetch(domain:api.github.com)",
-      "Bash(git branch:*)"
+      "Bash(git branch:*)",
+      "WebFetch(domain:spirimirror.github.io)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(python:*)",
+      "Bash(where nvcc:*)",
+      "Bash(nvidia-smi:*)",
+      "Bash(CMAKE_ARGS=\"-DNOVAPHY_WITH_IPC=ON -DCMAKE_TOOLCHAIN_FILE=F:/vcpkg/scripts/buildsystems/vcpkg.cmake\" pip install:*)",
+      "Bash(CMAKE_ARGS=\"-DNOVAPHY_WITH_IPC=ON -DCMAKE_TOOLCHAIN_FILE=F:/vcpkg/scripts/buildsystems/vcpkg.cmake -DCMAKE_CUDA_COMPILER=D:/CUDA/bin/nvcc.exe\" pip install:*)",
+      "Bash(ls:*)",
+      "Bash(where ninja:*)",
+      "Bash(CMAKE_GENERATOR=Ninja CMAKE_ARGS=\"-DNOVAPHY_WITH_IPC=ON -DCMAKE_TOOLCHAIN_FILE=F:/vcpkg/scripts/buildsystems/vcpkg.cmake -DCMAKE_CUDA_COMPILER=D:/CUDA/bin/nvcc.exe -DCMAKE_BUILD_TYPE=Release\" pip install:*)",
+      "Bash(echo:*)",
+      "Bash(reg query:*)",
+      "Bash(find:*)",
+      "Bash(powershell:*)",
+      "Bash(export:*)",
+      "Bash(F:/vcpkg/vcpkg install:*)",
+      "Bash(rm:*)",
+      "Bash(pip show:*)",
+      "Bash(cmd.exe:*)",
+      "Bash(cmake:*)"
     ]
   }
 }
