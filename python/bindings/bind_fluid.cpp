@@ -2,8 +2,10 @@
 #include <pybind11/eigen.h>
 #include <pybind11/stl.h>
 
+#include "novaphy/fluid/fluid_world.h"
 #include "novaphy/fluid/neighbor_search.h"
 #include "novaphy/fluid/particle_state.h"
+#include "novaphy/fluid/pbf_solver.h"
 #include "novaphy/fluid/sph_kernel.h"
 
 namespace py = pybind11;
@@ -167,6 +169,116 @@ void bind_fluid(py::module_& m) {
                       R"pbdoc(
                           float: Grid cell size in meters.
                       )pbdoc");
+
+    // --- PBFSettings ---
+    py::class_<PBFSettings>(m, "PBFSettings", R"pbdoc(
+        Configuration for the PBF fluid solver.
+    )pbdoc")
+        .def(py::init<>(), R"pbdoc(
+            Creates PBF settings with default values.
+        )pbdoc")
+        .def_readwrite("rest_density", &PBFSettings::rest_density, R"pbdoc(
+            float: Rest density rho_0 (kg/m^3).
+        )pbdoc")
+        .def_readwrite("kernel_radius", &PBFSettings::kernel_radius, R"pbdoc(
+            float: SPH kernel support radius h (m).
+        )pbdoc")
+        .def_readwrite("particle_radius", &PBFSettings::particle_radius, R"pbdoc(
+            float: Particle visual/collision radius (m).
+        )pbdoc")
+        .def_readwrite("solver_iterations", &PBFSettings::solver_iterations, R"pbdoc(
+            int: Number of PBF constraint iterations.
+        )pbdoc")
+        .def_readwrite("epsilon", &PBFSettings::epsilon, R"pbdoc(
+            float: Relaxation parameter for constraint (CFM).
+        )pbdoc")
+        .def_readwrite("xsph_viscosity", &PBFSettings::xsph_viscosity, R"pbdoc(
+            float: XSPH artificial viscosity coefficient.
+        )pbdoc")
+        .def("particle_mass", &PBFSettings::particle_mass,
+             py::arg("spacing"),
+             R"pbdoc(
+                 Compute particle mass from rest density and spacing.
+
+                 Args:
+                     spacing (float): Inter-particle spacing (m).
+
+                 Returns:
+                     float: Particle mass (kg).
+             )pbdoc");
+
+    // --- PBFSolver ---
+    py::class_<PBFSolver>(m, "PBFSolver", R"pbdoc(
+        Position Based Fluids solver (Macklin & Muller, SIGGRAPH 2013).
+    )pbdoc")
+        .def(py::init<const PBFSettings&>(),
+             py::arg("settings") = PBFSettings{},
+             R"pbdoc(
+                 Creates a PBF solver.
+
+                 Args:
+                     settings (PBFSettings): Solver configuration.
+             )pbdoc")
+        .def("step", &PBFSolver::step,
+             py::arg("state"), py::arg("dt"), py::arg("gravity"),
+             py::arg("particle_mass"),
+             R"pbdoc(
+                 Run one PBF step on a particle state.
+
+                 Args:
+                     state (ParticleState): Mutable particle state.
+                     dt (float): Time step (s).
+                     gravity (Vector3): Gravity vector (m/s^2).
+                     particle_mass (float): Mass per particle (kg).
+             )pbdoc")
+        .def_property_readonly("settings",
+             py::overload_cast<>(&PBFSolver::settings),
+             py::return_value_policy::reference_internal,
+             R"pbdoc(
+                 PBFSettings: Solver settings (reference).
+             )pbdoc");
+
+    // --- FluidWorld ---
+    py::class_<FluidWorld, World>(m, "FluidWorld", R"pbdoc(
+        Extended simulation world with PBF fluid support.
+    )pbdoc")
+        .def(py::init<const Model&, const std::vector<FluidBlockDef>&,
+                       SolverSettings, PBFSettings>(),
+             py::arg("model"),
+             py::arg("fluid_blocks") = std::vector<FluidBlockDef>{},
+             py::arg("solver_settings") = SolverSettings{},
+             py::arg("pbf_settings") = PBFSettings{},
+             R"pbdoc(
+                 Creates a fluid simulation world.
+
+                 Args:
+                     model (Model): Rigid-body model.
+                     fluid_blocks (list[FluidBlockDef]): Fluid block definitions.
+                     solver_settings (SolverSettings): Contact solver settings.
+                     pbf_settings (PBFSettings): PBF solver settings.
+             )pbdoc")
+        .def("step", &FluidWorld::step, py::arg("dt"),
+             R"pbdoc(
+                 Advance rigid-body and fluid simulation by one time step.
+
+                 Args:
+                     dt (float): Time step in seconds.
+             )pbdoc")
+        .def_property_readonly("fluid_state",
+             py::overload_cast<>(&FluidWorld::fluid_state),
+             py::return_value_policy::reference_internal,
+             R"pbdoc(
+                 ParticleState: Fluid particle state (reference).
+             )pbdoc")
+        .def_property_readonly("num_particles", &FluidWorld::num_particles, R"pbdoc(
+            int: Number of fluid particles.
+        )pbdoc")
+        .def_property_readonly("pbf_settings",
+             py::overload_cast<>(&FluidWorld::pbf_settings),
+             py::return_value_policy::reference_internal,
+             R"pbdoc(
+                 PBFSettings: PBF solver settings (reference).
+             )pbdoc");
 
     // --- Free functions ---
     m.def("generate_fluid_block", &generate_fluid_block,

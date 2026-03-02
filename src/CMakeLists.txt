@@ -17,6 +17,8 @@ add_library(novaphy_core STATIC
     sim/world.cpp
     fluid/particle_state.cpp
     fluid/neighbor_search.cpp
+    fluid/pbf_solver.cpp
+    fluid/fluid_world.cpp
 )
 
 target_include_directories(novaphy_core PUBLIC

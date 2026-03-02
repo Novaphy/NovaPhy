@@ -78,6 +78,9 @@ from novaphy._core import (
     ParticleState,
     SpatialHashGrid,
     generate_fluid_block,
+    PBFSettings,
+    PBFSolver,
+    FluidWorld,
 )
 
 # Optional IPC support (requires CUDA + libuipc)
@@ -125,6 +128,9 @@ __all__ = [
     "ParticleState",
     "SpatialHashGrid",
     "generate_fluid_block",
+    "PBFSettings",
+    "PBFSolver",
+    "FluidWorld",
 ]
 
 # Conditionally export IPC symbols
