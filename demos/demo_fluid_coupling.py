@@ -72,8 +72,8 @@ def build_scene():
     pbf = novaphy.PBFSettings()
     pbf.rest_density = 1000.0
     pbf.kernel_radius = spacing * 4.0
-    pbf.solver_iterations = 4
-    pbf.xsph_viscosity = 0.01
+    pbf.solver_iterations = 6
+    pbf.xsph_viscosity = 0.1
     pbf.epsilon = 100.0
     pbf.particle_radius = spacing * 0.5
 

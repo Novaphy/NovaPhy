@@ -29,10 +29,15 @@ def build_scene():
     pbf = novaphy.PBFSettings()
     pbf.rest_density = 1000.0
     pbf.kernel_radius = block.particle_spacing * 4.0
-    pbf.solver_iterations = 4
-    pbf.xsph_viscosity = 0.01
+    pbf.solver_iterations = 6
+    pbf.xsph_viscosity = 0.1
     pbf.epsilon = 100.0
     pbf.particle_radius = block.particle_spacing * 0.5
+
+    # Domain bounds (container walls)
+    pbf.use_domain_bounds = True
+    pbf.domain_lower = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+    pbf.domain_upper = np.array([1.0, 1.0, 0.4], dtype=np.float32)
 
     # Empty rigid-body model (no rigid bodies in this demo)
     builder = novaphy.ModelBuilder()
@@ -56,6 +61,22 @@ def run_headless(world, n_steps=300, dt=1.0/120.0):
     print("Done.")
 
 
+def make_box_lines(lo, hi):
+    """Create 12 edges of an axis-aligned box."""
+    v = np.array([
+        [lo[0], lo[1], lo[2]], [hi[0], lo[1], lo[2]],
+        [hi[0], hi[1], lo[2]], [lo[0], hi[1], lo[2]],
+        [lo[0], lo[1], hi[2]], [hi[0], lo[1], hi[2]],
+        [hi[0], hi[1], hi[2]], [lo[0], hi[1], hi[2]],
+    ], dtype=np.float32)
+    edges = np.array([
+        [0,1],[1,2],[2,3],[3,0],  # front face
+        [4,5],[5,6],[6,7],[7,4],  # back face
+        [0,4],[1,5],[2,6],[3,7],  # connecting edges
+    ], dtype=np.int32)
+    return v, edges
+
+
 def run_polyscope(world, spacing, dt=1.0/120.0):
     """Run with Polyscope visualization."""
     ps.init()
@@ -68,6 +89,14 @@ def run_polyscope(world, spacing, dt=1.0/120.0):
     cloud = ps.register_point_cloud("fluid", positions,
                                      radius=spacing * 0.5,
                                      color=(0.2, 0.5, 0.9))
+
+    # Register wireframe box for domain bounds
+    lo = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+    hi = np.array([1.0, 1.0, 0.4], dtype=np.float32)
+    box_v, box_e = make_box_lines(lo, hi)
+    box_net = ps.register_curve_network("box", box_v, box_e)
+    box_net.set_color((0.8, 0.8, 0.8))
+    box_net.set_radius(0.003, relative=False)
 
     def callback():
         world.step(dt)
