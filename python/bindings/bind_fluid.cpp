@@ -196,6 +196,15 @@ void bind_fluid(py::module_& m) {
         .def_readwrite("xsph_viscosity", &PBFSettings::xsph_viscosity, R"pbdoc(
             float: XSPH artificial viscosity coefficient.
         )pbdoc")
+        .def_readwrite("use_domain_bounds", &PBFSettings::use_domain_bounds, R"pbdoc(
+            bool: Whether to clamp particles to domain AABB.
+        )pbdoc")
+        .def_readwrite("domain_lower", &PBFSettings::domain_lower, R"pbdoc(
+            Vector3: Domain lower bound (m).
+        )pbdoc")
+        .def_readwrite("domain_upper", &PBFSettings::domain_upper, R"pbdoc(
+            Vector3: Domain upper bound (m).
+        )pbdoc")
         .def("particle_mass", &PBFSettings::particle_mass,
              py::arg("spacing"),
              R"pbdoc(

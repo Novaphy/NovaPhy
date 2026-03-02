@@ -22,6 +22,10 @@ struct PBFSettings {
     float corr_k = 0.001f;             /**< Tensile instability correction: k coefficient. */
     int corr_n = 4;                    /**< Tensile instability correction: exponent n. */
 
+    bool use_domain_bounds = false;     /**< Whether to clamp particles to domain AABB. */
+    Vec3f domain_lower = Vec3f(-10.0f, 0.0f, -10.0f);   /**< Domain lower bound (m). */
+    Vec3f domain_upper = Vec3f(10.0f, 10.0f, 10.0f);     /**< Domain upper bound (m). */
+
     /**
      * @brief Compute particle mass from rest density and spacing.
      *

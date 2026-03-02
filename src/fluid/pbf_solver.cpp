@@ -60,9 +60,28 @@ void PBFSolver::step(ParticleState& state, float dt, const Vec3f& gravity,
         apply_xsph_viscosity(state, particle_mass);
     }
 
-    // 7. Update positions
-    for (int i = 0; i < n; ++i) {
-        state.positions[i] = state.predicted_positions[i];
+    // 7. Update positions (with optional domain clamping)
+    if (settings_.use_domain_bounds) {
+        float pr = settings_.particle_radius;
+        Vec3f lo = settings_.domain_lower + Vec3f(pr, pr, pr);
+        Vec3f hi = settings_.domain_upper - Vec3f(pr, pr, pr);
+        for (int i = 0; i < n; ++i) {
+            Vec3f& p = state.predicted_positions[i];
+            for (int d = 0; d < 3; ++d) {
+                if (p[d] < lo[d]) {
+                    p[d] = lo[d];
+                    state.velocities[i][d] = 0.0f;
+                } else if (p[d] > hi[d]) {
+                    p[d] = hi[d];
+                    state.velocities[i][d] = 0.0f;
+                }
+            }
+            state.positions[i] = p;
+        }
+    } else {
+        for (int i = 0; i < n; ++i) {
+            state.positions[i] = state.predicted_positions[i];
+        }
     }
 }
 
