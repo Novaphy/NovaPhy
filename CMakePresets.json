@@ -2,24 +2,29 @@
     "version": 3,
     "configurePresets": [
         {
-            "name": "default",
-            "binaryDir": "${sourceDir}/build",
+            "name": "base_configure",
+            "hidden": true,
+            "description": "It set the common configure. DO NOT USE THIS PRESET DIRECTLY.",
             "cacheVariables": {
-                "CMAKE_TOOLCHAIN_FILE": {
+                "CMAKE_TOOLCHAIN_FILE" : {
                     "type": "FILEPATH",
                     "value": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
-                },
+                }
+            }
+        },
+        {
+            "name": "default",
+            "binaryDir": "${sourceDir}/build",
+            "inherits": "base_configure",
+            "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release"
             }
         },
         {
             "name": "debug",
             "binaryDir": "${sourceDir}/build-debug",
+            "inherits": "base_configure",
             "cacheVariables": {
-                "CMAKE_TOOLCHAIN_FILE": {
-                    "type": "FILEPATH",
-                    "value": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
-                },
                 "CMAKE_BUILD_TYPE": "Debug"
             }
         },
@@ -27,14 +32,17 @@
             "name": "ipc",
             "displayName": "Release with IPC (libuipc + CUDA)",
             "binaryDir": "${sourceDir}/build-ipc",
+            "inherits": "base_configure",
             "cacheVariables": {
-                "CMAKE_TOOLCHAIN_FILE": {
-                    "type": "FILEPATH",
-                    "value": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
-                },
                 "CMAKE_BUILD_TYPE": "Release",
                 "NOVAPHY_WITH_IPC": "ON"
             }
+        },
+        {
+            "name": "default-ci",
+            "binaryDir": "${sourceDir}/build-ci",
+            "inherits": "default",
+            "toolchainFile": "$env{VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake"
         }
     ],
     "buildPresets": [
@@ -49,6 +57,10 @@
         {
             "name": "ipc",
             "configurePreset": "ipc"
+        },
+        {
+            "name": "default-ci",
+            "configurePreset": "default-ci"
         }
     ]
 }

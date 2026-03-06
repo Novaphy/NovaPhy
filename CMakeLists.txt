@@ -8,9 +8,23 @@ if(NOVAPHY_WITH_IPC)
     list(APPEND VCPKG_MANIFEST_FEATURES "ipc")
 endif()
 
+# ---------- Project setup ----------
+set(NOVAPHY_PROJECT_NAME "")
+set(NOVAPHY_PROJECT_VERSION "")
+if (SKBUILD)
+    set(NOVAPHY_PROJECT_NAME "${SKBUILD_PROJECT_NAME}")
+    set(NOVAPHY_PROJECT_VERSION "${SKBUILD_PROJECT_VERSION}")
+else()
+    set(NOVAPHY_PROJECT_NAME "NovaPhy")
+    # TODO There are too many version strings floating around (setup.py, CMakeLists.txt, __init__.py).
+    set(NOVAPHY_PROJECT_VERSION "0.1.0")
+endif()
+
+include(compat/compat.cmake)
+
 project(
-    ${SKBUILD_PROJECT_NAME}
-    VERSION ${SKBUILD_PROJECT_VERSION}
+    ${NOVAPHY_PROJECT_NAME}
+    VERSION ${NOVAPHY_PROJECT_VERSION}
     LANGUAGES CXX
 )
 

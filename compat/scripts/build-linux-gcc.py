@@ -1,5 +1,13 @@
 #!/usr/bin/python3
 
+"""
+This script builds NovaPhy using the GCC compiler on Linux. 
+It allows users to specify custom paths for GCC and CUDA 
+installations, and optionally enables IPC support. The 
+script sets up the necessary environment variables and CMake
+ arguments before invoking pip to build the package.
+"""
+
 import argparse
 import os
 import sys
@@ -47,6 +55,12 @@ def main():
         default=r"build/{wheel_tag}",
         help="Directory to store build files"
     )
+
+    parser.add_argument(
+        "--cmake-standalone",
+        action="store_true",
+        help="Run cmake configuration step without scikit-build"
+    )
     
     args = parser.parse_args()
     
@@ -56,9 +70,7 @@ def main():
     enable_ipc = args.ipc
     verbose_flag = args.verbose
     build_dir = args.build_dir
-    
-    print(f"GCC Directory: {gcc_dir if gcc_dir else 'Not specified'}")
-    print(f"CUDA Directory: {cuda_dir if cuda_dir else 'Not specified'}")
+    cmake_standalone = args.cmake_standalone
     
     # Select preset based on IPC option
     if enable_ipc:
@@ -86,22 +98,26 @@ def main():
             cmake_args.append(f"-DCMAKE_CUDA_HOST_COMPILER={gpp_path}")
             cuda_include = os.path.join(cuda_dir, "include")
             gcc_include = os.path.join(gcc_dir, "include")
-            nvcc_flags = f"--system-include {cuda_include},{gcc_include}"
-            cmake_args.append(f"-DCMAKE_CUDA_FLAGS=\"{nvcc_flags}\"")
-
-    os.environ["CMAKE_BUILD_PARALLEL_LEVEL"] = "8"
-    print("Running CMake with arguments:", " ".join(cmake_args))
-    os.environ["CMAKE_ARGS"] = " ".join(cmake_args)
+            nvcc_flags = [f"--system-include={cuda_include},{gcc_include}"]
+            cmake_args.append(f"-DCMAKE_CUDA_FLAGS=\"{' '.join(nvcc_flags)}\"")
 
     print("🧰Build configuration summary")
-    print("CMAKE_ARGS: ", os.environ["CMAKE_ARGS"])
+    print("CMAKE_ARGS: ", " ".join(cmake_args))
     print("CC:\t", os.environ["CC"])
     print("CXX:\t", os.environ["CXX"])
 
-    cmd = ["pip", "install", "-e", ".", "-C", f"build-dir={build_dir}"]
-    if (verbose_flag):
-        cmd.append("-v")
-    subprocess.run(cmd, check=True)
+    if cmake_standalone:
+        cmake_cmd = ["cmake", "-S", ".", "-B", build_dir] + cmake_args
+        subprocess.run(cmake_cmd, check=True)
+    else:
+        os.environ["CMAKE_BUILD_PARALLEL_LEVEL"] = "8"
+        os.environ["CMAKE_ARGS"] = " ".join(cmake_args)
+
+
+        cmd = ["pip", "install", "-e", ".", "-C", f"build-dir={build_dir}"]
+        if (verbose_flag):
+            cmd.append("-v")
+        subprocess.run(cmd, check=True)
 
 
 if __name__ == '__main__':

@@ -8,7 +8,7 @@ TODO
 
 ### Basic
 
-NovaPhy without IPC support just needs the following prerequisites (as mentioned in [README.md](../README.md)):
+NovaPhy without IPC support just needs the following prerequisites (as mentioned in [README.md](../README.md#setup)):
 
 - [Conda](https://docs.conda.io/) (Miniconda or Anaconda)
 - [vcpkg](https://vcpkg.io/) installed. *Optional*
@@ -23,7 +23,7 @@ conda env create -f environment.yml
 conda activate novaphy
 
 # Install NovaPhy
-CMKAE_ARGS="--preset=default" pip install -e .
+CMAKE_ARGS="--preset=default" pip install -e .
 
 # Then you can access NovaPhy from Python in the virtual environment.
 python
@@ -32,14 +32,14 @@ python
 ### IPC support
 
 NovaPhy relies on [libuipc](https://github.com/spiriMirror/libuipc) for IPC support.
-It requires C++20 features, and its upstream depends on some non-standard features.
+It requires C++20 features, and its upstream dependencies depend on some non-standard features.
 Thus, the prerequisites are more specific.
 
 - [Conda](https://docs.conda.io/) (Miniconda or Anaconda)
 - [vcpkg](https://vcpkg.io/) installed.
 - C++20 compiler
   - MSVC 2019+
-  - GCC 11+
+  - GCC 11, 12, 13
   - Clang 10+
 - CUDA 12.4
 
@@ -51,6 +51,27 @@ git submodule update --init --recursive # Update submodule directory.
 CMAKE_ARGS="--preset=ipc" pip install -e .
 ```
 
+### Standalone CMake build
+
+If you want a standalone CMake build without the Python build toolchain, just run CMake.
+
+```bash
+mkdir build
+cd build
+cmake -S .. -B . --preset=default --install-prefix=/path/to/install
+# or
+cmake -S .. -B . --preset=ipc ... # to enable ipc support
+
+# build
+cmake --build .
+
+# install
+# TODO install for CMake standalone build.
+```
+
+The CMake standalone build is used for C/C++ development. Building and installing for Python
+is supported, but is NOT recommended.
+
 ### Troubleshooting
 
 If you use a compiler not listed above, it may fail with the default configuration.
@@ -60,16 +81,16 @@ Here are some common reasons for crashes with specific compilers:
 |:---:|:---|:---:|
 | `gcc-9` | **libuipc** needs `<span>` which was implemented in GCC 10. | Unfixable |
 | `gcc-10` | The pstl of `libstdc++ 10` isn't compatible with `onetbb` in the current baseline. (See also [vcpkg.json](../vcpkg.json)). | Unfixable |
-| `gcc-15` | `urdfdom` expects a non-standard import for `uint32_t` which is removed from `libstdc++`. | Fixed  [^1] |
+| `gcc-15` | `urdfdom` expects a non-standard import for `uint32_t` which is removed from `libstdc++`. | Fixed [^1] |
 | `gcc14, gcc-15` | `gcc>13` is not compatible with `nvcc-12` | Unfixable |
 | `nvcc-13` | **muda** expects an unstrict dependent name resolve. | TODO |
 
-[^1] : The issue has been fixed by upstream maintainers with a patch. However, the patch may fail in certain cases. If it does, adding `-include cstdint` to your `CXXFLAGS` environment variable should resolve the problem.
+[^1] : The issue has been fixed by upstream maintainers with a patch. However, the patch hasn't been included in the current baseline (2025.07.25). Adding `-include cstdint` to your `CXXFLAGS` environment variable should resolve the problem.
 
 > [!note] Clang with libstdc++
 > Clang uses `libstdc++` as the default standard library. Any crash caused by `libstdc++` also affects Clang.
 
-Compilers are described by name and major version, such as `gcc-9`. For each major version, only one version is tested:
+Compilers are described by name and major version, such as `gcc-9`. For each major version, only one version is tested (✅ marks compatible compilers):
 
 - GCC 9.5.0
 - GCC 10.5.0
