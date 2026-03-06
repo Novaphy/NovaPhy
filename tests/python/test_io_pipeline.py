@@ -91,6 +91,48 @@ def Xform "World"
 """
 
 
+URDF_RPY_ROUNDTRIP_SAMPLE = """<robot name="rpy_roundtrip">
+  <link name="base">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0.31 -0.47 1.12"/>
+      <mass value="2.0"/>
+      <inertia ixx="0.2" ixy="0" ixz="0" iyy="0.2" iyz="0" izz="0.2"/>
+    </inertial>
+    <collision>
+      <origin xyz="0.1 -0.2 0.3" rpy="-0.21 0.33 -0.44"/>
+      <geometry><box size="1 1 1"/></geometry>
+    </collision>
+  </link>
+  <link name="tip">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="0.05" ixy="0" ixz="0" iyy="0.05" iyz="0" izz="0.05"/>
+    </inertial>
+    <collision>
+      <origin xyz="0 0.5 0" rpy="0 0 0"/>
+      <geometry><sphere radius="0.2"/></geometry>
+    </collision>
+  </link>
+  <joint name="hinge" type="revolute">
+    <parent link="base"/>
+    <child link="tip"/>
+    <origin xyz="0.2 1.0 -0.4" rpy="0.52 -0.61 0.73"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1.57" upper="1.57" effort="10" velocity="2"/>
+  </joint>
+</robot>
+"""
+
+
+def _assert_same_rotation(q0, q1):
+    a = np.array(q0, dtype=np.float32)
+    b = np.array(q1, dtype=np.float32)
+    a = a / np.linalg.norm(a)
+    b = b / np.linalg.norm(b)
+    assert np.abs(np.dot(a, b)) > 1.0 - 1.0e-5
+
+
 def test_urdf_parse_build_and_write(tmp_path):
     urdf_path = tmp_path / "robot.urdf"
     urdf_path.write_text(URDF_SAMPLE, encoding="utf-8")
@@ -170,6 +212,22 @@ def test_urdf_articulation_is_topologically_ordered(tmp_path):
     assert len(child_indices) == 1
     assert joints[child_indices[0]].parent == root_indices[0]
     assert root_indices[0] < child_indices[0]
+
+
+def test_urdf_rpy_roundtrip_preserves_orientation(tmp_path):
+    urdf_path = tmp_path / "rpy_roundtrip.urdf"
+    urdf_path.write_text(URDF_RPY_ROUNDTRIP_SAMPLE, encoding="utf-8")
+
+    parser = novaphy.UrdfParser()
+    model_before = parser.parse_file(str(urdf_path))
+
+    out_path = tmp_path / "rpy_roundtrip_out.urdf"
+    parser.write_file(model_before, str(out_path))
+    model_after = parser.parse_file(str(out_path))
+
+    _assert_same_rotation(model_before.links[0].inertial.origin.rotation, model_after.links[0].inertial.origin.rotation)
+    _assert_same_rotation(model_before.links[0].collisions[0].origin.rotation, model_after.links[0].collisions[0].origin.rotation)
+    _assert_same_rotation(model_before.joints[0].origin.rotation, model_after.joints[0].origin.rotation)
 
 
 def test_feature_completeness_checker():
