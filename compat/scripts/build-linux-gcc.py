@@ -68,7 +68,13 @@ def main():
         default=None,
         help="Installation prefix for CMake (only used with --cmake-standalone)"
     )
-    
+
+    parser.add_argument(
+        "--wheel",
+        action="store_true",
+        help="Build a wheel package instead of installing"
+    )
+
     args = parser.parse_args()
     
     # Process arguments
@@ -79,6 +85,7 @@ def main():
     build_dir = args.build_dir
     cmake_standalone = args.cmake_standalone
     install_prefix = args.install_prefix
+    build_wheel = args.wheel
 
     # Select preset based on IPC option
     if enable_ipc:
@@ -90,6 +97,10 @@ def main():
         cmake_args.append(f"--install-prefix={install_prefix}")
     elif install_prefix and not cmake_standalone:
         print("Warning: --install-prefix is only used with --cmake-standalone. Ignoring it.")
+
+    if build_wheel and cmake_standalone:
+        print("Warning: --wheel option is not compatible with --cmake-standalone. Ignoring it.")
+        build_wheel = False
 
     if gcc_dir:
         gcc_path = os.path.join(gcc_dir, "bin", "gcc")
@@ -127,10 +138,16 @@ def main():
         os.environ["CMAKE_ARGS"] = " ".join(cmake_args)
 
 
-        cmd = ["pip", "install", "-e", ".", "-C", f"build-dir={build_dir}"]
-        if (verbose_flag):
-            cmd.append("-v")
-        subprocess.run(cmd, check=True)
+        if build_wheel:
+            cmd = ["python", "-m", "build", "--wheel", "-C", f"build-dir={build_dir}"]
+            if (verbose_flag):
+                cmd.append("-v")
+            subprocess.run(cmd, check=True)
+        else:
+            cmd = ["pip", "install", "-e", ".", "-C", f"build-dir={build_dir}"]
+            if (verbose_flag):
+                cmd.append("-v")
+            subprocess.run(cmd, check=True)
 
 
 if __name__ == '__main__':

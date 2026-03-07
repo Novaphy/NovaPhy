@@ -1,5 +1,10 @@
 # NovaPhy core static library
 
+configure_file(
+    ${CMAKE_SOURCE_DIR}/include/novaphy/novaphy_config.h.in
+    ${CMAKE_BINARY_DIR}/include/novaphy/novaphy_config.h
+)
+
 add_library(novaphy_core STATIC
     math/spatial.cpp
     math/math_utils.cpp
@@ -26,6 +31,7 @@ add_library(novaphy::core ALIAS novaphy_core)
 
 target_include_directories(novaphy_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>
 )
 
 target_link_libraries(novaphy_core PUBLIC
@@ -63,6 +69,12 @@ if (NOT SKBUILD)
         FILES_MATCHING PATTERN "*.h"
     )
 
+    install(DIRECTORY ${CMAKE_BINARY_DIR}/include/novaphy/
+        COMPONENT core
+        DESTINATION include/novaphy
+        FILES_MATCHING PATTERN "*.h"
+    )
+
     install(EXPORT novaphyTargets
         COMPONENT core
         FILE novaphyCoreTargets.cmake
@@ -70,15 +82,21 @@ if (NOT SKBUILD)
         DESTINATION lib/cmake/novaphy
     )
 
-    if (NOVAPHY_BUNDLE_UIPC)
-        # If we're building a bundled libuipc, we need to export its targets as well.
-        # TODO Some configuration is needed to avoid conflicts when libuipc is also installed separately on the system.
+endif()
 
-        install(DIRECTORY "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/bin/"
-            COMPONENT core
-            DESTINATION lib/novaphy-bundle
-            FILES_MATCHING PATTERN "*"
-        )
+if (NOVAPHY_BUNDLE_UIPC)
+    # If we're building a bundled libuipc, we need to export its targets as well.
+    # TODO Some configuration is needed to avoid conflicts when libuipc is also installed separately on the system.
+
+    if (SKBUILD)
+        set(uipc_bundle_dest novaphy/lib/novaphy-bundled-libs)
+    else()
+        set(uipc_bundle_dest lib/novaphy-bundled-libs)
     endif()
 
+    install(DIRECTORY "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}/bin/"
+        COMPONENT core
+        DESTINATION ${uipc_bundle_dest}
+        FILES_MATCHING PATTERN "*"
+    )
 endif()
