@@ -94,6 +94,13 @@ trace export for short focused captures. Disable visualization when diagnosing
 engine cost because Polyscope and Python-side rendering are not included in these
 engine timings.
 
+You can also run the dedicated profiling demo:
+
+```bash
+python demos/demo_performance_monitor.py --scene rigid
+python demos/demo_performance_monitor.py --scene fluid --measured-steps 60
+```
+
 ## Demos
 
 ### Rigid Body
