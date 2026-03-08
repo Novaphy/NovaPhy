@@ -3,16 +3,45 @@ cmake_minimum_required(VERSION 3.15...4.0)
 # ---------- Optional IPC support via libuipc ----------
 # Must be declared before project() so vcpkg installs the 'ipc' feature deps.
 option(NOVAPHY_WITH_IPC "Build with libuipc IPC support (requires CUDA >= 12.4)" OFF)
+option(NOVAPHY_BUNDLE_UIPC "Bundle libuipc with NovaPhy package. If disabled, novaphy will attempt to find it system-wide." ON)
+option(NOVAPHY_ENABLE_INSTALL "Enable installation of NovaPhy targets and CMake config files" ON)
+
+# Processing options
 
 if(NOVAPHY_WITH_IPC)
     list(APPEND VCPKG_MANIFEST_FEATURES "ipc")
 endif()
 
+if (NOVAPHY_BUNDLE_UIPC AND NOT NOVAPHY_WITH_IPC)
+    message(WARNING "NOVAPHY_BUNDLE_UIPC is enabled but NOVAPHY_WITH_IPC is disabled. Ignoring NOVAPHY_BUNDLE_UIPC.")
+    set(NOVAPHY_BUNDLE_UIPC OFF CACHE BOOL "" FORCE)
+endif()
+
+set(NOVAPHY_PROJECT_NAME "")
+set(NOVAPHY_PROJECT_VERSION "")
+if (SKBUILD)
+    set(NOVAPHY_PROJECT_NAME "${SKBUILD_PROJECT_NAME}")
+    set(NOVAPHY_PROJECT_VERSION "${SKBUILD_PROJECT_VERSION}")
+else()
+    set(NOVAPHY_PROJECT_NAME "NovaPhy")
+    # TODO There are too many version strings floating around (setup.py, CMakeLists.txt, __init__.py).
+    set(NOVAPHY_PROJECT_VERSION "0.1.0")
+endif()
+
+include(compat/compat.cmake)
+
 project(
-    ${SKBUILD_PROJECT_NAME}
-    VERSION ${SKBUILD_PROJECT_VERSION}
+    ${NOVAPHY_PROJECT_NAME}
+    VERSION ${NOVAPHY_PROJECT_VERSION}
     LANGUAGES CXX
 )
+
+# Disable install and test when building as a subproject.
+if (NOT (CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME))
+    set(NOVAPHY_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+    # TODO NovaPhy doesn't have any C++ tests for now.
+endif()
+
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -90,4 +119,27 @@ if(NOT DEFINED SKBUILD)
         enable_testing()
         add_subdirectory(tests)
     endif()
+
+endif()
+
+# Install CMake config files
+if (NOVAPHY_ENABLE_INSTALL AND NOT SKBUILD)
+    include(CMakePackageConfigHelpers)
+    write_basic_package_version_file(
+        "${CMAKE_CURRENT_BINARY_DIR}/novaphyConfigVersion.cmake"
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY AnyNewerVersion
+    )
+
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/novaphyConfig.cmake" 
+    [====[
+        include(${CMAKE_CURRENT_LIST_DIR}/novaphyCoreTargets.cmake)
+    ]====])
+
+    install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/novaphyConfigVersion.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/novaphyConfig.cmake"
+        DESTINATION lib/cmake/novaphy
+        COMPONENT core
+    )
 endif()
