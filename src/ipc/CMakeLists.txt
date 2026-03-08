@@ -20,10 +20,6 @@ target_link_libraries(novaphy_ipc PUBLIC
     uipc::uipc
 )
 
-target_compile_definitions(novaphy_ipc PUBLIC
-    NOVAPHY_HAS_IPC=1
-)
-
 # Ensure libuipc backend DLLs are built (they are MODULE libraries
 # not linked into uipc::uipc, so EXCLUDE_FROM_ALL would skip them)
 if(TARGET uipc::backends)

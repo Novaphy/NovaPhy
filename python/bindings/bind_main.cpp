@@ -12,7 +12,7 @@ void bind_sim(py::module_& m);
 void bind_dynamics(py::module_& m);
 void bind_fluid(py::module_& m);
 
-#ifdef NOVAPHY_HAS_IPC
+#ifdef NOVAPHY_WITH_IPC
 void bind_ipc(py::module_& m);
 #endif
 
@@ -31,6 +31,14 @@ PYBIND11_MODULE(_core, m) {
             str: Semantic version string.
     )pbdoc");
 
+    m.def("libuipc_bind_type", &novaphy::libuipc_bind_type, R"pbdoc(
+        Returns how libuipc is being used by NovaPhy.
+
+        Returns:
+            str: "none" if IPC support is disabled, "bundled" if using the bundled libuipc, or "system" if
+            using a system-installed libuipc.
+    )pbdoc");
+
     bind_math(m);
     bind_core(m);
     bind_collision(m);
@@ -38,7 +46,7 @@ PYBIND11_MODULE(_core, m) {
     bind_dynamics(m);
     bind_fluid(m);
 
-#ifdef NOVAPHY_HAS_IPC
+#ifdef NOVAPHY_WITH_IPC
     bind_ipc(m);
     m.def("has_ipc", []() { return true; }, "Returns True if IPC support is available.");
 #else
