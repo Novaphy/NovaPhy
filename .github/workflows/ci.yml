@@ -35,8 +35,12 @@ jobs:
       - name: Install Python build dependencies
         run: pip install scikit-build-core pybind11 numpy pytest
 
+      - name: Set pybind11 CMake dir
+        shell: bash
+        run: echo "pybind11_DIR=$(python -m pybind11 --cmakedir)" >> "$GITHUB_ENV"
+
       - name: Configure standalone CMake
-        run: cmake -S . -B build/standalone -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="${{ env.CMAKE_TOOLCHAIN_FILE }}"
+        run: cmake -S . -B build/standalone -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="${{ env.CMAKE_TOOLCHAIN_FILE }}" -Dpybind11_DIR="${{ env.pybind11_DIR }}"
 
       - name: Build standalone CMake
         run: cmake --build build/standalone --config Release
