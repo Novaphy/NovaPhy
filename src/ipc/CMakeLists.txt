@@ -12,7 +12,7 @@ set_target_properties(novaphy_ipc PROPERTIES
 )
 
 target_include_directories(novaphy_ipc PUBLIC
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
 )
 
 target_link_libraries(novaphy_ipc 

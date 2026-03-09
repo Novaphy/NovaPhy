@@ -1,0 +1,19 @@
+{
+    "default-registry": {
+        "kind": "git",
+        "baseline": "dd3097e305afa53f7b4312371f62058d2e665320",
+        "repository": "https://github.com/microsoft/vcpkg"
+    },
+    "registries": [
+        {
+            "kind": "git",
+            "repository": "https://github.com/spiriMirror/vcpkg",
+            "reference": "master",
+            "baseline": "7a5a8167ff2159564076a3e0f4b025695e9df91e",
+            "packages": [
+                "octree",
+                "ftetwild"
+            ]
+        }
+    ]
+}

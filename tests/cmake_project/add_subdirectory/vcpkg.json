@@ -1,0 +1,32 @@
+{
+    "name": "novaphy-test",
+    "version-string": "0.1.0",
+    "description": "Test project for NovaPhy CMake add_subdirectory",
+    "dependencies": [
+        "eigen3",
+        "gtest",
+        "spdlog",
+        "fmt",
+        "nlohmann-json",
+        "libigl",
+        "cppitertools",
+        "dylib",
+        "magic-enum",
+        "tinygltf",
+        "tbb",
+        "catch2",
+        "urdfdom",
+        "cpptrace",
+        "octree"
+    ],
+    "overrides": [
+        {
+            "name": "fmt",
+            "version": "10.2.1"
+        },
+        {
+            "name": "spdlog",
+            "version": "1.12.0"
+        }
+    ]
+}

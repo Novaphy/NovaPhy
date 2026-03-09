@@ -1,8 +1,8 @@
 # NovaPhy core static library
 
 configure_file(
-    ${CMAKE_SOURCE_DIR}/include/novaphy/novaphy_config.h.in
-    ${CMAKE_BINARY_DIR}/include/novaphy/novaphy_config.h
+    ${PROJECT_SOURCE_DIR}/include/novaphy/novaphy_config.h.in
+    ${PROJECT_BINARY_DIR}/include/novaphy/novaphy_config.h
 )
 
 add_library(novaphy_core STATIC
@@ -30,8 +30,8 @@ add_library(novaphy_core STATIC
 add_library(novaphy::core ALIAS novaphy_core)
 
 target_include_directories(novaphy_core PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
-    $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>
 )
 
 target_link_libraries(novaphy_core PUBLIC
@@ -64,13 +64,13 @@ if (NOVAPHY_ENABLE_INSTALL)
             RUNTIME DESTINATION bin
         )
 
-        install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/novaphy/
+        install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/novaphy/
             COMPONENT core
             DESTINATION include/novaphy
             FILES_MATCHING PATTERN "*.h"
         )
 
-        install(DIRECTORY ${CMAKE_BINARY_DIR}/include/novaphy/
+        install(DIRECTORY ${PROJECT_BINARY_DIR}/include/novaphy/
             COMPONENT core
             DESTINATION include/novaphy
             FILES_MATCHING PATTERN "*.h"
