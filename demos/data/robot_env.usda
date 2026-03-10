@@ -1,0 +1,43 @@
+#usda 21.08
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+def Xform "World"
+{
+    def Xform "Floor"
+    {
+        double3 xformOp:translate = (0, -0.02, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float physics:mass = 0
+        rel material:binding = "/World/Materials/Ground"
+        float3 novaphy:boxHalfExtents = (5, 0.02, 5)
+    }
+
+    def Xform "ObstacleA"
+    {
+        double3 xformOp:translate = (0.8, 0.25, 0.0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float physics:mass = 6
+        rel material:binding = "/World/Materials/Concrete"
+        float3 novaphy:boxHalfExtents = (0.25, 0.25, 0.25)
+    }
+
+    def Xform "ObstacleB"
+    {
+        double3 xformOp:translate = (-0.8, 0.35, 0.5)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float physics:mass = 4
+        rel material:binding = "/World/Materials/Wood"
+        float3 novaphy:boxHalfExtents = (0.2, 0.35, 0.2)
+    }
+
+    def DistantLight "Sun"
+    {
+        double3 xformOp:translate = (2, 4, 1)
+        float intensity = 35000
+        color3f color = (1, 0.98, 0.94)
+    }
+}

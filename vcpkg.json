@@ -4,7 +4,8 @@
     "description": "A 3D physics engine for embodied intelligence",
     "dependencies": [
         "eigen3",
-        "gtest"
+        "gtest",
+        "tinyxml2"
     ],
     "features": {
         "ipc": {

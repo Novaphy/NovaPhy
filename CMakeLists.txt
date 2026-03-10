@@ -14,12 +14,14 @@ project(
     LANGUAGES CXX
 )
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Find Eigen3 via vcpkg
 find_package(Eigen3 CONFIG REQUIRED)
+find_package(tinyxml2 CONFIG REQUIRED)
 
 # Find pybind11 from pip-installed package (not vcpkg)
 find_package(pybind11 CONFIG REQUIRED)

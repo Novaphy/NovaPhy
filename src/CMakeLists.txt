@@ -13,6 +13,7 @@ add_library(novaphy_core STATIC
     dynamics/free_body_solver.cpp
     dynamics/featherstone.cpp
     dynamics/articulated_solver.cpp
+    sim/performance_monitor.cpp
     sim/state.cpp
     sim/world.cpp
     fluid/particle_state.cpp
@@ -20,6 +21,11 @@ add_library(novaphy_core STATIC
     fluid/pbf_solver.cpp
     fluid/fluid_world.cpp
     fluid/boundary.cpp
+    io/urdf_parser.cpp
+    io/openusd_importer.cpp
+    io/scene_builder.cpp
+    io/simulation_exporter.cpp
+    io/feature_completeness.cpp
 )
 
 target_include_directories(novaphy_core PUBLIC
@@ -28,6 +34,7 @@ target_include_directories(novaphy_core PUBLIC
 
 target_link_libraries(novaphy_core PUBLIC
     Eigen3::Eigen
+    tinyxml2::tinyxml2
 )
 
 target_compile_definitions(novaphy_core PUBLIC
