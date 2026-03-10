@@ -12,7 +12,8 @@ set_target_properties(novaphy_ipc PROPERTIES
 )
 
 target_include_directories(novaphy_ipc PUBLIC
-    ${PROJECT_SOURCE_DIR}/include
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
 )
 
 target_link_libraries(novaphy_ipc 
@@ -26,4 +27,20 @@ target_link_libraries(novaphy_ipc
 # not linked into uipc::uipc, so EXCLUDE_FROM_ALL would skip them)
 if(TARGET uipc::backends)
     add_dependencies(novaphy_ipc uipc::backends)
+endif()
+
+if (NOVAPHY_ENABLE_INSTALL)
+    install(TARGETS novaphy_ipc
+        COMPONENT ipc
+        ARCHIVE DESTINATION lib
+        LIBRARY DESTINATION lib
+        RUNTIME DESTINATION bin
+    )
+
+    install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/novaphy/ipc/
+        COMPONENT ipc
+        DESTINATION include/novaphy/ipc
+        FILES_MATCHING PATTERN "*.h"
+    )
+
 endif()

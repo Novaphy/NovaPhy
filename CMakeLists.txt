@@ -125,6 +125,12 @@ endif()
 
 # Install CMake config files
 if (NOVAPHY_ENABLE_INSTALL AND NOT SKBUILD)
+    install(EXPORT novaphyTargets
+        FILE novaphyTargets.cmake
+        NAMESPACE novaphy::
+        DESTINATION lib/cmake/novaphy
+    )
+
     include(CMakePackageConfigHelpers)
     write_basic_package_version_file(
         "${CMAKE_CURRENT_BINARY_DIR}/novaphyConfigVersion.cmake"
@@ -136,7 +142,7 @@ if (NOVAPHY_ENABLE_INSTALL AND NOT SKBUILD)
     [====[
         include(CMakeFindDependencyMacro)
         find_dependency(Eigen3 CONFIG REQUIRED)
-        include("${CMAKE_CURRENT_LIST_DIR}/novaphyCoreTargets.cmake")
+        include("${CMAKE_CURRENT_LIST_DIR}/novaphyTargets.cmake")
     ]====])
 
     install(FILES

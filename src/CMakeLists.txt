@@ -68,19 +68,7 @@ if (NOVAPHY_ENABLE_INSTALL)
             COMPONENT core
             DESTINATION include/novaphy
             FILES_MATCHING PATTERN "*.h"
-        )
-
-        install(DIRECTORY ${PROJECT_BINARY_DIR}/include/novaphy/
-            COMPONENT core
-            DESTINATION include/novaphy
-            FILES_MATCHING PATTERN "*.h"
-        )
-
-        install(EXPORT novaphyTargets
-            COMPONENT core
-            FILE novaphyCoreTargets.cmake
-            NAMESPACE novaphy::
-            DESTINATION lib/cmake/novaphy
+            PATTERN "ipc/*.h" EXCLUDE
         )
 
     endif()
