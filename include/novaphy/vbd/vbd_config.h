@@ -5,23 +5,34 @@
 namespace novaphy {
 
 /**
- * @brief VBD/AVBD 配置，与 avbd-demo3d 的 Solver 参数一致。
+ * @brief VBD/AVBD configuration, aligned with avbd-demo3d solver parameters.
  */
 struct VBDConfig {
     float dt = 1.0f / 60.0f;
     Vec3f gravity = Vec3f(0.0f, -9.81f, 0.0f);
     int iterations = 10;
-    int max_contacts_per_pair = 8;  ///< 与 demo3d 一致：每对体最多 8 个接触，支撑更对称、静止更稳
+    /// Max contact points per shape pair (demo3d uses 8 for more symmetric support).
+    int max_contacts_per_pair = 8;
 
-    /// 稳定化：C_eff 中保留的步初误差比例（demo: alpha=0.99）
+    /// Stabilization: fraction of step-initial error kept in C_eff (demo: alpha=0.99).
     float alpha = 0.99f;
-    /// 每步 penalty/lambda 暖启动衰减（demo: gamma=0.999）
+    /// Warmstart decay for penalty/lambda per step (demo: gamma=0.999).
     float gamma = 0.999f;
 
-    /// 接触约束 penalty 增长系数（demo: betaLin=10000）
+    /// Penalty growth factor for contact constraints (demo: betaLin=10000).
     float beta_linear = 10000.0f;
-    /// 关节约束 penalty 增长系数（demo: betaAng=100）
+    /// Penalty growth factor for angular constraints (demo: betaAng=100).
     float beta_angular = 100.0f;
+
+    /// Initial penalty for new contacts (reduces first-frame overshoot/jitter when > PENALTY_MIN).
+    float initial_penalty = 1000.0f;
+    /// Velocity smoothing factor in (0,1]: 1 = no smoothing, lower = smoother (e.g. 0.7 reduces jitter).
+    float velocity_smoothing = 1.0f;
+
+    /// Primal update relaxation (demo3d uses 1.0). Values < 1 (e.g. 0.9) reduce overshoot and can reduce jitter.
+    float primal_relaxation = 1.0f;
+    /// Small diagonal regularization added to 6x6 LHS before solve (improves conditioning, reduces numerical jitter).
+    float lhs_regularization = 1e-6f;
 };
 
 }  // namespace novaphy

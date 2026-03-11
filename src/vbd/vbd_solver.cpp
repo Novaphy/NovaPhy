@@ -1,27 +1,26 @@
 /**
  * @file vbd_solver.cpp
- * @brief 3D AVBD solver, 完全仿照 avbd-demo3d 的 Solver 流程与公式。
+ * @brief 3D AVBD solver, following avbd-demo3d's step flow and equations.
  */
- #include "novaphy/vbd/vbd_solver.h"
+#include "novaphy/vbd/vbd_solver.h"
+#include "novaphy/vbd/vbd_collide.h"
+#include "novaphy/math/math_utils.h"
 
- #include "novaphy/math/math_utils.h"
- 
- #include <algorithm>
- #include <cstdint>
- #include <cmath>
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <tuple>
- #include <unordered_map>
- #include <vector>
+#include <unordered_map>
+#include <vector>
  
  namespace novaphy {
  
  namespace {
  
- constexpr float PENALTY_MIN = 1.0f;
- constexpr float PENALTY_MAX = 10000000000.0f;
- constexpr float COLLISION_MARGIN = 0.01f;
- constexpr float STICK_THRESH = 0.00001f;
- constexpr float PRIMAL_RELAX = 1.0f;
+constexpr float PENALTY_MIN = 1.0f;
+constexpr float PENALTY_MAX = 10000000000.0f;
+constexpr float COLLISION_MARGIN = 0.01f;
+constexpr float STICK_THRESH = 0.00001f;
  
  struct WarmstartContactData {
      Vec3f rA = Vec3f::Zero();
@@ -40,83 +39,20 @@
  }
  
  inline int quantize_float(float x, float q) {
-     // symmetric rounding to nearest integer
      float s = x / q;
      return static_cast<int>(std::floor(s + (s >= 0.0f ? 0.5f : -0.5f)));
  }
- 
- inline int argmax_abs3(const Vec3f& v) {
-     const float ax = std::abs(v.x());
-     const float ay = std::abs(v.y());
-     const float az = std::abs(v.z());
-     return (ax >= ay && ax >= az) ? 0 : (ay >= az ? 1 : 2);
- }
- 
- inline void face_uv_from_local_point(const Vec3f& r, int axis, float& u, float& v) {
-     // Choose the two coordinates spanning the face orthogonal to `axis`.
-     if (axis == 0) { u = r.y(); v = r.z(); }
-     else if (axis == 1) { u = r.x(); v = r.z(); }
-     else { u = r.x(); v = r.y(); }
- }
- 
+
  inline uint64_t contact_key(const AvbdContact& c) {
-     // Contact persistence key.
-     //
-     // demo3d uses a feature key (face/edge ids). We first try to use a similar feature_id
-     // forwarded from narrowphase; if unavailable we approximate a stable feature signature
-     // from local anchors (rA/rB) using quantized face-local coordinates.
+     // demo3d: merge by (body_a, body_b, feature.key). VBD contacts always have feature_id from vbd_collide.
      uint64_t h = 1469598103934665603ull;
      h = fnv1a_u64(h, static_cast<uint64_t>(static_cast<uint32_t>(c.body_a + 2)));
      h = fnv1a_u64(h, static_cast<uint64_t>(static_cast<uint32_t>(c.body_b + 2)));
- 
-     if (c.feature_id >= 0) {
-         h = fnv1a_u64(h, static_cast<uint64_t>(static_cast<uint32_t>(c.feature_id)));
-         return h;
-     }
- 
-     constexpr float Q_UV = 0.02f;  // 2cm quantization for face-local coordinates
- 
-     auto add_face_uv = [&](const Vec3f& r_local) {
-         const int axis = argmax_abs3(r_local);
-         const int sign = (r_local[axis] >= 0.0f) ? 1 : -1;
-         float u = 0.0f, v = 0.0f;
-         face_uv_from_local_point(r_local, axis, u, v);
- 
-         h = fnv1a_u64(h, static_cast<uint64_t>(static_cast<uint32_t>(axis)));
-         h = fnv1a_u64(h, static_cast<uint64_t>(static_cast<uint32_t>(sign > 0 ? 1u : 0u)));
-         h = fnv1a_u64(h, static_cast<uint64_t>(static_cast<uint32_t>(quantize_float(u, Q_UV))));
-         h = fnv1a_u64(h, static_cast<uint64_t>(static_cast<uint32_t>(quantize_float(v, Q_UV))));
-     };
- 
-     if (c.body_a == -1 && c.body_b >= 0) {
-         // plane/world vs dynamic body
-         add_face_uv(c.rB);
-     } else if (c.body_b == -1 && c.body_a >= 0) {
-         add_face_uv(c.rA);
-     } else {
-         add_face_uv(c.rA);
-         add_face_uv(c.rB);
-     }
+     h = fnv1a_u64(h, static_cast<uint64_t>(static_cast<uint32_t>(c.feature_id)));
      return h;
  }
  
-/** 与 demo3d maths.h orthonormal(normal) 完全一致：行0=normal，行1/2=两切向。 */
-inline Mat3f orthonormal_basis(const Vec3f& normal) {
-    Vec3f n = normal.normalized();
-    Vec3f t1 = (std::abs(n.x()) > std::abs(n.z()))
-                   ? Vec3f(-n.y(), n.x(), 0.0f)
-                   : Vec3f(0.0f, -n.z(), n.y());
-    t1.normalize();
-    Vec3f t2 = n.cross(t1);
-    t2.normalize();
-    Mat3f basis;
-    basis.row(0) = n;
-    basis.row(1) = t1;
-    basis.row(2) = t2;
-    return basis;
-}
- 
- /** 用世界系角速度积分四元数：q_{t+dt} = exp([ω_world] dt) ⊗ q_t 。 */
+/** Integrate quaternion using world-space angular velocity (first-order). */
  inline Quatf quat_add_omega_dt(const Quatf& q, const Vec3f& omega, float dt) {
      // Match demo3d: first-order quaternion integration using world-space angular velocity.
      // q_dot = 0.5 * [0, ω] ⊗ q
@@ -128,7 +64,7 @@ inline Mat3f orthonormal_basis(const Vec3f& normal) {
      return q_new;
  }
  
- /** 小角近似：dq = q * q0^{-1}，返回 2*vec(dq)，并做最短弧（w>=0）处理。 */
+/** Small-angle rotation vector: returns 2*vec(q*q0^{-1}), with shortest-arc handling. */
  inline Vec3f quat_small_angle_diff_vec(const Quatf& q, const Quatf& q0) {
      Quatf dq = q * q0.inverse();
      dq.normalize();
@@ -136,13 +72,22 @@ inline Mat3f orthonormal_basis(const Vec3f& normal) {
      return 2.0f * Vec3f(dq.x(), dq.y(), dq.z());
  }
  
- /** 角速度由四元数差分得到（BDF1）：omega = (q_now * q_prev^{-1}) 的轴角 / dt。 */
+/** Angular velocity from quaternion difference (BDF1 small-angle). */
  inline Vec3f angular_velocity_from_quat_diff(const Quatf& q_now, const Quatf& q_prev, float dt) {
      // Match demo3d: use small-angle delta divided by dt.
      if (dt <= 0.0f) return Vec3f::Zero();
      return quat_small_angle_diff_vec(q_now, q_prev) / dt;
  }
- 
+
+ /** Apply angular correction exactly like avbd-demo3d: q_new = normalize(q + quat(dxAng,0)*q*0.5). */
+ inline Quatf quat_add_angular_vec(const Quatf& q, const Vec3f& dxAng) {
+     const Quatf dq(0.0f, dxAng.x(), dxAng.y(), dxAng.z());
+     Quatf out = q;
+     out.coeffs() += 0.5f * (dq * q).coeffs();
+     out.normalize();
+     return out;
+ }
+
  }  // namespace
  
  VbdSolver::VbdSolver(const VBDConfig& cfg)
@@ -153,7 +98,7 @@ inline Mat3f orthonormal_basis(const Vec3f& normal) {
  }
  
  void VbdSolver::set_model(const Model&) {
-     // 仅占位，接触每步从碰撞检测重建。
+    // No-op: contacts are rebuilt from collision detection every step.
  }
  
  void VbdSolver::build_contact_constraints(const Model& model, const SimState& state) {
@@ -161,9 +106,7 @@ inline Mat3f orthonormal_basis(const Vec3f& normal) {
      const int num_shapes = model.num_shapes();
      std::vector<AABB> shape_aabbs(num_shapes);
      std::vector<bool> shape_static(num_shapes);
- 
-     // --- Contact persistence (demo3d Manifold::initialize merges by feature.key) ---
-     // Build cache from previous frame's contacts so warmstarting actually reuses λ/penalty.
+
      std::unordered_map<uint64_t, WarmstartContactData> old_cache;
      old_cache.reserve(avbd_contacts_.size() * 2 + 8);
      for (const AvbdContact& oldc : avbd_contacts_) {
@@ -176,7 +119,7 @@ inline Mat3f orthonormal_basis(const Vec3f& normal) {
          old_cache[contact_key(oldc)] = d;
      }
      avbd_contacts_.clear();
- 
+
      for (int si = 0; si < num_shapes; ++si) {
          const auto& shape = model.shapes[si];
          if (shape.body_index >= 0) {
@@ -187,105 +130,98 @@ inline Mat3f orthonormal_basis(const Vec3f& normal) {
              shape_static[si] = true;
          }
      }
- 
      broadphase_.update(shape_aabbs, shape_static);
-     contacts_.clear();
      const auto& pairs = broadphase_.get_pairs();
- 
+
+     std::vector<VbdContactPoint> vbd_points;
+     vbd_points.reserve(static_cast<size_t>(config_.max_contacts_per_pair));
+
      for (const auto& pair : pairs) {
          const auto& sa = model.shapes[pair.body_a];
          const auto& sb = model.shapes[pair.body_b];
-         Transform ta = (sa.body_index >= 0) ? state.transforms[sa.body_index] : Transform::identity();
-         Transform tb = (sb.body_index >= 0) ? state.transforms[sb.body_index] : Transform::identity();
- 
-         std::vector<ContactPoint> new_contacts;
-         if (!collide_shapes(sa, ta, sb, tb, new_contacts)) continue;
- 
-         // 接触点合并：每对体最多 max_contacts_per_pair 个，减少过约束（box-plane 8→4）
-         const int max_cp = config_.max_contacts_per_pair;
-         if (static_cast<int>(new_contacts.size()) > max_cp) {
-             std::partial_sort(new_contacts.begin(), new_contacts.begin() + max_cp,
-                              new_contacts.end(),
-                              [](const ContactPoint& a, const ContactPoint& b) {
-                                  return a.penetration > b.penetration;
-                              });
-             new_contacts.resize(max_cp);
+         int ia = sa.body_index;
+         int ib = sb.body_index;
+         bool valid_a = (ia >= 0 && ia < n);
+         bool valid_b = (ib >= 0 && ib < n);
+         if (valid_a && valid_b && model.bodies[ia].is_static() && model.bodies[ib].is_static())
+             continue;
+
+         Transform wa = (ia >= 0) ? state.transforms[ia] * sa.local_transform : Transform::identity();
+         Transform wb = (ib >= 0) ? state.transforms[ib] * sb.local_transform : Transform::identity();
+
+         Mat3f basis;
+         int num_contacts = 0;
+         if (sa.type == ShapeType::Box && sb.type == ShapeType::Box) {
+             num_contacts = vbd_collide_box_box(
+                 wa.position, wa.rotation, sa.box.half_extents,
+                 wb.position, wb.rotation, sb.box.half_extents,
+                 &vbd_points, &basis);
+         } else if (sa.type == ShapeType::Plane && sb.type == ShapeType::Box) {
+             num_contacts = vbd_collide_box_plane(
+                 sa.plane.normal, sa.plane.offset,
+                 wb.position, wb.rotation, sb.box.half_extents,
+                 &vbd_points, &basis);
+         } else if (sa.type == ShapeType::Box && sb.type == ShapeType::Plane) {
+             num_contacts = vbd_collide_box_plane(
+                 -sb.plane.normal, -sb.plane.offset,
+                 wa.position, wa.rotation, sa.box.half_extents,
+                 &vbd_points, &basis);
+             for (auto& p : vbd_points) {
+                 std::swap(p.rA, p.rB);
+             }
          }
- 
-         for (const auto& cp : new_contacts) {
-             int ia = cp.body_a;
-             int ib = cp.body_b;
-             bool valid_a = (ia >= 0 && ia < n);
-             bool valid_b = (ib >= 0 && ib < n);
-             if (!valid_a && !valid_b) continue;
-             if (valid_a && valid_b && model.bodies[ia].is_static() && model.bodies[ib].is_static()) continue;
- 
+         if (num_contacts <= 0) continue;
+
+         const float friction = combine_friction(sa.friction, sb.friction);
+         const int max_cp = config_.max_contacts_per_pair;
+         int to_add = std::min(num_contacts, max_cp);
+
+         for (int k = 0; k < to_add; ++k) {
+             const auto& pt = vbd_points[k];
              AvbdContact ac;
              ac.body_a = ia;
              ac.body_b = ib;
-             ac.friction = combine_friction(sa.friction, sb.friction);
-             ac.feature_id = cp.feature_id;
- 
-             // 法向 NovaPhy 为 A→B；demo 用 B→A 为 basis 行0，故用 -n。
-             Vec3f n = cp.normal.normalized();
-             ac.basis = orthonormal_basis(-n);
- 
-             Vec3f pA = cp.position;
-             Vec3f pB = cp.position - n * cp.penetration;
-             if (!valid_a)
-                 ac.rA = pA;
-             else if (model.bodies[ia].is_static())
-                 ac.rA = pA;
-             else
-                 ac.rA = state.transforms[ia].rotation.inverse() * (pA - state.transforms[ia].position);
-             if (!valid_b)
-                 ac.rB = pB;
-             else if (model.bodies[ib].is_static())
-                 ac.rB = pB;
-             else
-                 ac.rB = state.transforms[ib].rotation.inverse() * (pB - state.transforms[ib].position);
- 
-             // Merge warmstart data if this contact matches a persisted one.
-             // If previous frame had static friction (stick), keep old local anchors like demo3d.
-             {
-                 const uint64_t k_new = contact_key(ac);
-                 auto it = old_cache.find(k_new);
-                 if (it != old_cache.end()) {
-                     ac.penalty = it->second.penalty;
-                     ac.lambda = it->second.lambda;
-                     ac.stick = it->second.stick;
-                     if (ac.stick) {
-                         ac.rA = it->second.rA;
-                         ac.rB = it->second.rB;
-                     }
+             ac.rA = pt.rA;
+             ac.rB = pt.rB;
+             ac.basis = basis;
+             ac.friction = friction;
+             ac.feature_id = pt.feature_key;
+
+             uint64_t k_new = contact_key(ac);
+             auto it = old_cache.find(k_new);
+             if (it != old_cache.end()) {
+                 ac.penalty = it->second.penalty;
+                 ac.lambda = it->second.lambda;
+                 ac.stick = it->second.stick;
+                 if (ac.stick) {
+                     ac.rA = it->second.rA;
+                     ac.rB = it->second.rB;
                  }
+             } else {
+                 ac.penalty = Vec3f(PENALTY_MIN, PENALTY_MIN, PENALTY_MIN);
              }
- 
-             // C0 = basis*(xA - xB) + margin（与 demo 一致）；法向仅允许支撑力 F[0]<=0，步末做法向速度归零防漂移
-             Vec3f xA = !valid_a ? ac.rA : (model.bodies[ia].is_static() ? ac.rA : state.transforms[ia].transform_point(ac.rA));
-             Vec3f xB = !valid_b ? ac.rB : (model.bodies[ib].is_static() ? ac.rB : state.transforms[ib].transform_point(ac.rB));
+
+             Vec3f xA = !valid_a ? ac.rA : state.transforms[ia].transform_point(ac.rA);
+             Vec3f xB = !valid_b ? ac.rB : state.transforms[ib].transform_point(ac.rB);
              ac.C0 = ac.basis * (xA - xB) + Vec3f(COLLISION_MARGIN, 0, 0);
- 
-             // Warmstart（Eq.19）：lambda *= alpha*gamma, penalty = clamp(penalty*gamma, MIN, MAX)
+
              ac.lambda = ac.lambda * config_.alpha * config_.gamma;
              ac.penalty.x() = clampf(ac.penalty.x() * config_.gamma, PENALTY_MIN, PENALTY_MAX);
              ac.penalty.y() = clampf(ac.penalty.y() * config_.gamma, PENALTY_MIN, PENALTY_MAX);
              ac.penalty.z() = clampf(ac.penalty.z() * config_.gamma, PENALTY_MIN, PENALTY_MAX);
- 
+
              avbd_contacts_.push_back(ac);
          }
      }
 
-    // 稳定排序：减少浮点累加顺序导致的系统性偏差（如金字塔“向后倾”）
-    // 以 body pair + feature_id + 局部锚点量化为键排序（feature_id=-1 时主要依赖锚点）。
-    constexpr float Q_ANCHOR = 0.01f;  // 1cm
-    auto qv = [&](const Vec3f& v) {
-        return std::tuple<int, int, int>(
-            quantize_float(v.x(), Q_ANCHOR),
-            quantize_float(v.y(), Q_ANCHOR),
-            quantize_float(v.z(), Q_ANCHOR));
-    };
-    std::sort(avbd_contacts_.begin(), avbd_contacts_.end(),
+     constexpr float Q_ANCHOR = 0.01f;
+     auto qv = [&](const Vec3f& v) {
+         return std::tuple<int, int, int>(
+             quantize_float(v.x(), Q_ANCHOR),
+             quantize_float(v.y(), Q_ANCHOR),
+             quantize_float(v.z(), Q_ANCHOR));
+     };
+     std::sort(avbd_contacts_.begin(), avbd_contacts_.end(),
               [&](const AvbdContact& a, const AvbdContact& b) {
                   const int a0 = std::min(a.body_a, a.body_b);
                   const int a1 = std::max(a.body_a, a.body_b);
@@ -320,16 +256,17 @@ inline Mat3f orthonormal_basis(const Vec3f& normal) {
          // Match demo3d: small-angle quaternion difference as angular delta vector.
          Vec3f dqAng = quat_small_angle_diff_vec(rot, initial_rotations_[bi]);
  
-         // LHS = M/dt², RHS = M/dt²*(position - inertial)，与 demo3d 完全一致
+        // LHS = M/dt^2, RHS = M/dt^2*(position - inertial) (demo3d).
          Mat3f MLin = body.mass * Mat3f::Identity();
-         // demo3d: MAng = body.moment（对角惯性），角部未知数为世界系，无 R 变换
-         Mat3f MAng = body.inertia;
+        // Match demo3d: use diagonal inertia (moment) only for angular block.
+         Mat3f MAng = Mat3f::Zero();
+         MAng.diagonal() = Vec3f(body.inertia(0, 0), body.inertia(1, 1), body.inertia(2, 2));
  
          Mat3f lhsLin = MLin / dt2;
          Mat3f lhsAng = MAng / dt2;
          Mat3f lhsCross = Mat3f::Zero();
          Vec3f rhsLin = (MLin / dt2) * (pos - inertial_positions_[bi]);
-         // 与 demo3d 一致：rhsAng = MAng/(dt²)*(positionAng - inertialAng) + jAng^T*F，再传 -rhsAng 给 solve
+        // demo3d: rhsAng = MAng/dt^2*(rot - inertialRot) + jAng^T*F, then solve with -rhsAng.
          Vec3f rot_err = quat_small_angle_diff_vec(rot, inertial_rotations_[bi]);  // current - inertial
          Vec3f rhsAng = (MAng / dt2) * rot_err;
  
@@ -340,10 +277,11 @@ inline Mat3f orthonormal_basis(const Vec3f& normal) {
              if (!onA && !onB) continue;
              ++num_contacts_on_body;
  
-             Vec3f rA_w = (onA && ac.body_a >= 0) ? state.transforms[ac.body_a].rotation * ac.rA : (ac.body_a == -1 ? ac.rA : Vec3f::Zero());
-             Vec3f rB_w = (onB && ac.body_b >= 0) ? state.transforms[ac.body_b].rotation * ac.rB : (ac.body_b == -1 ? ac.rB : Vec3f::Zero());
+             // World-space contact arms for both bodies (needed for C and for jAAng/jBAng).
+             Vec3f rA_w = (ac.body_a >= 0) ? state.transforms[ac.body_a].rotation * ac.rA : (ac.body_a == -1 ? ac.rA : Vec3f::Zero());
+             Vec3f rB_w = (ac.body_b >= 0) ? state.transforms[ac.body_b].rotation * ac.rB : (ac.body_b == -1 ? ac.rB : Vec3f::Zero());
  
-             // jALin = basis, jBLin = -basis；仅允许支撑力 F[0]<=0
+            // jALin = basis, jBLin = -basis; normal support uses F[0] <= 0.
              Mat3f jALin = ac.basis;
              Mat3f jBLin = -ac.basis;
              // d(xB-xA)/d(omega_A) => angular jacobian for A: +rA x (basis.row)
@@ -397,7 +335,7 @@ inline Mat3f orthonormal_basis(const Vec3f& normal) {
              rhsAng += jAngT * F;
          }
  
-         // 与 demo3d 完全一致：solve(LHS, -rhsLin, -rhsAng) => RHS = [-rhsLin; -rhsAng]
+        // Solve with RHS = [-rhsLin; -rhsAng] (demo3d).
          Mat6f LHS = Mat6f::Zero();
          LHS.block<3, 3>(0, 0) = lhsLin;
          LHS.block<3, 3>(0, 3) = lhsCross.transpose();
@@ -406,27 +344,34 @@ inline Mat3f orthonormal_basis(const Vec3f& normal) {
          SpatialVector RHS = SpatialVector::Zero();
          RHS.head<3>() = -rhsLin;
          RHS.tail<3>() = -rhsAng;
- 
-         Eigen::LDLT<Mat6f> ldlt(LHS);
-         if (ldlt.info() != Eigen::Success) {
-             const float reg = 1e-6f * (MLin(0, 0) / dt2);
-             for (int i = 0; i < 6; ++i) LHS(i, i) += reg;
-             ldlt.compute(LHS);
+
+         // Optional LHS regularization (stack/many contacts benefit; pyramid often fine without).
+         const float reg = std::max(0.0f, config_.lhs_regularization);
+         if (reg > 0.0f) {
+             LHS.block<3, 3>(0, 0).diagonal().array() += reg;
+             LHS.block<3, 3>(3, 3).diagonal().array() += reg;
          }
+         Eigen::LDLT<Mat6f> ldlt(LHS);
          SpatialVector dq;
-         if (ldlt.info() == Eigen::Success)
+         if (ldlt.info() == Eigen::Success) {
              dq = ldlt.solve(RHS);
-         else
-             dq.setZero();
-         Vec3f dxLin = dq.head<3>() * PRIMAL_RELAX;
-         Vec3f dxAng = dq.tail<3>() * PRIMAL_RELAX;
+         } else {
+             constexpr float reg_fallback = 1e-5f;
+             LHS.block<3, 3>(0, 0).diagonal().array() += reg_fallback;
+             LHS.block<3, 3>(3, 3).diagonal().array() += reg_fallback;
+             Eigen::LDLT<Mat6f> ldlt2(LHS);
+             if (ldlt2.info() == Eigen::Success)
+                 dq = ldlt2.solve(RHS);
+             else
+                 dq.setZero();
+         }
+         const float relax = std::max(0.01f, std::min(1.0f, config_.primal_relaxation));
+         Vec3f dxLin = dq.head<3>() * relax;
+         Vec3f dxAng = dq.tail<3>() * relax;
  
          state.transforms[bi].position += dxLin;
-         float angle = dxAng.norm();
-         if (angle > 1e-8f) {
-             // 与 demo3d 一致：角部世界系，左乘更新 positionAng + dxAng
-             state.transforms[bi].rotation = (Quatf(Eigen::AngleAxisf(angle, dxAng / angle)) * state.transforms[bi].rotation).normalized();
-         }
+         // Apply angular update exactly like demo3d: positionAng = positionAng + dxAng (quat + float3).
+         state.transforms[bi].rotation = quat_add_angular_vec(state.transforms[bi].rotation, dxAng);
      }
  }
  
@@ -451,8 +396,9 @@ inline Mat3f orthonormal_basis(const Vec3f& normal) {
              dqBAng = quat_small_angle_diff_vec(state.transforms[ib].rotation, initial_rotations_[ib]);
          }
  
-         Vec3f rA_w = dynA ? state.transforms[ia].rotation * ac.rA : Vec3f::Zero();
-         Vec3f rB_w = dynB ? state.transforms[ib].rotation * ac.rB : Vec3f::Zero();
+         // World-space contact arms (use current rotation; static bodies still have valid transform).
+         Vec3f rA_w = (ia >= 0) ? state.transforms[ia].rotation * ac.rA : Vec3f::Zero();
+         Vec3f rB_w = (ib >= 0) ? state.transforms[ib].rotation * ac.rB : Vec3f::Zero();
          Mat3f jALin = ac.basis;
          Mat3f jBLin = -ac.basis;
          Mat3f jAAng;
@@ -505,30 +451,32 @@ inline Mat3f orthonormal_basis(const Vec3f& normal) {
          initial_rotations_[i] = state.transforms[i].rotation;
      }
  
-     // 1) Broadphase + 建接触 + C0、warmstart（与 demo Initialize and warmstart forces 一致）
+    // 1) Broadphase + contacts + C0 + warmstart
      build_contact_constraints(model, state);
  
-     // 2) Initialize bodies：惯性位姿、initial（与 demo 一致）
+    // 2) Initialize bodies (inertial state + initial)
      for (int i = 0; i < n; ++i) {
          const auto& body = model.bodies[i];
          if (body.is_static()) continue;
  
-         Vec3f vel = state.linear_velocities[i];
-         Vec3f omega = state.angular_velocities[i];
-        // Constant-acceleration term should be 0.5 * g * dt^2.
-        // Using g * dt^2 injects extra downward drift, causing excessive penetration and oscillatory correction.
-        inertial_positions_[i] = state.transforms[i].position + vel * dt + 0.5f * gravity * (dt * dt);
+        Vec3f vel = state.linear_velocities[i];
+        Vec3f omega = state.angular_velocities[i];
+        // Match avbd-demo3d: inertialLin = x + v*dt + g*dt^2 (no 0.5 factor).
+        inertial_positions_[i] = state.transforms[i].position + vel * dt + gravity * (dt * dt);
          inertial_rotations_[i] = quat_add_omega_dt(state.transforms[i].rotation, omega, dt);
  
-         float g2 = gravity.squaredNorm();
-         float accelWeight = 1.0f;
-         if (g2 > 1e-12f && prev_linear_velocities_.size() == static_cast<size_t>(n)) {
-             Vec3f accel = (vel - prev_linear_velocities_[i]) / std::max(dt, 1e-6f);
-             accelWeight = clampf(accel.dot(gravity) / g2, 0.0f, 1.0f);
-         }
+        float g2 = gravity.squaredNorm();
+        float accelWeight = 1.0f;
+        if (g2 > 1e-12f && prev_linear_velocities_.size() == static_cast<size_t>(n)) {
+            Vec3f accel = (vel - prev_linear_velocities_[i]) / dt;
+            accelWeight = clampf(accel.dot(gravity) / g2, 0.0f, 1.0f);
+            if (!std::isfinite(accelWeight))
+                accelWeight = 0.0f;
+        }
+        // Match avbd-demo3d warmstart position: x = x + v*dt + g*(accelWeight*dt^2).
         state.transforms[i].position =
-            state.transforms[i].position + vel * dt + 0.5f * gravity * (accelWeight * dt * dt);
-         state.transforms[i].rotation = quat_add_omega_dt(state.transforms[i].rotation, omega, dt);
+            state.transforms[i].position + vel * dt + gravity * (accelWeight * dt * dt);
+        state.transforms[i].rotation = quat_add_omega_dt(state.transforms[i].rotation, omega, dt);
      }
  
      // 3) Main solver loop
@@ -537,7 +485,7 @@ inline Mat3f orthonormal_basis(const Vec3f& normal) {
          avbd_dual(model, state);
      }
  
-     // 4) BDF1 velocities
+     // 4) BDF1 velocities (demo3d)
      for (int i = 0; i < n; ++i) {
          if (model.bodies[i].is_static()) continue;
          prev_linear_velocities_[i] = state.linear_velocities[i];

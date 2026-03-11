@@ -1,4 +1,5 @@
 add_library(novaphy_vbd STATIC
+    vbd_collide.cpp
     vbd_world.cpp
     vbd_solver.cpp
 )

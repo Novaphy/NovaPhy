@@ -12,8 +12,8 @@ struct VBDWorld::Impl {
 
     Impl(const Model& m, const VBDConfig& cfg)
         : model(m), config(cfg), solver(cfg) {
-        // 初始化状态缓冲区，与普通 World 保持一致：一体一 transform。
-        state.init(model.num_bodies(), model.initial_transforms);
+        // Initialize state buffers from the model's initial transforms.
+        state.init(model.initial_transforms);
         solver.set_model(model);
     }
 

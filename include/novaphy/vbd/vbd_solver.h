@@ -5,43 +5,44 @@
 #include "novaphy/vbd/vbd_config.h"
 
 #include "novaphy/collision/broadphase.h"
-#include "novaphy/collision/narrowphase.h"
 #include "novaphy/core/contact.h"
 #include "novaphy/math/math_types.h"
 #include "novaphy/math/spatial.h"
+#include "novaphy/vbd/vbd_collide.h"
 
 #include <vector>
 
 namespace novaphy {
 
 /**
- * @brief 单点接触约束（与 avbd-demo3d Manifold::Contact 一致）。
+ * @brief Single-point contact constraint (aligned with avbd-demo3d Manifold::Contact).
  *
- * 使用 3 维约束：法向 + 两个切向。basis 行0 = 法向（B→A），行1/2 = 切向。
- * C0 = basis * (xA - xB) + {COLLISION_MARGIN, 0, 0}，F = K*C + lambda。
+ * Uses a 3D constraint: normal + two tangents.
+ * basis row0 = normal (B→A), row1/2 = tangents.
+ * C0 = basis * (xA - xB) + {COLLISION_MARGIN, 0, 0}, and F = K*C + lambda.
  */
 struct AvbdContact {
     int body_a = -1;
     int body_b = -1;
-    Vec3f rA = Vec3f::Zero();  // 接触点在 A 局部系
-    Vec3f rB = Vec3f::Zero();  // 接触点在 B 局部系
-    Mat3f basis = Mat3f::Identity();  // 行0=法向(B→A)，行1/2=切向
+    Vec3f rA = Vec3f::Zero();  // Contact point in A local coordinates.
+    Vec3f rB = Vec3f::Zero();  // Contact point in B local coordinates.
+    Mat3f basis = Mat3f::Identity();  // row0=normal (B→A), row1/2=tangents.
 
-    Vec3f C0 = Vec3f::Zero();   // 步初约束值
+    Vec3f C0 = Vec3f::Zero();   // Constraint value at step start.
     Vec3f penalty = Vec3f::Zero();
     Vec3f lambda = Vec3f::Zero();
     float friction = 0.5f;
     bool stick = false;
 
-    // 可选：从 narrowphase 传递过来的特征 id，用于接触持久化（类似 demo3d FeaturePair::key）。
+    // Optional: feature id forwarded from narrowphase for contact persistence (demo3d FeaturePair::key).
     int feature_id = -1;
 };
 
 /**
- * @brief 3D AVBD 求解器，完全仿照 avbd-demo3d 的 Solver 流程与公式。
+ * @brief 3D AVBD solver, following avbd-demo3d's step flow and equations.
  *
- * 流程：broadphase → 建接触并 initialize（C0、warmstart）→ 体初始化（惯性位姿、initial）→
- * 主循环（primal 每体 6x6 → dual 更新）→ BDF1 速度。
+ * Flow: broadphase → build contacts & initialize (C0, warmstart) → body initialize (inertial, initial) →
+ * main loop (primal per-body 6x6 + dual update) → BDF1 velocities.
  */
 class VbdSolver {
 public:
@@ -53,22 +54,21 @@ public:
     void set_model(const Model& model);
 
     /**
-     * @brief 单步 AVBD：与 demo3d Solver::step() 一致。
+     * @brief One AVBD step (matches demo3d Solver::step()).
      */
     void step(const Model& model, SimState& state);
 
 private:
-    /** 每步开始时建接触列表并填 C0、warmstart lambda/penalty。 */
+    /** Build contacts at step start and initialize C0 + warmstart lambda/penalty. */
     void build_contact_constraints(const Model& model, const SimState& state);
 
-    /** 主循环：每体组装 6x6 LHS/RHS，求解并施加 dq。 */
+    /** Main loop primal: assemble per-body 6x6 LHS/RHS, solve and apply dq. */
     void avbd_primal(const Model& model, SimState& state);
-    /** 主循环：对偶更新 lambda、penalty。 */
+    /** Main loop dual: update lambda and penalty. */
     void avbd_dual(const Model& model, const SimState& state);
 
     VBDConfig config_;
     SweepAndPrune broadphase_;
-    std::vector<ContactPoint> contacts_;
     std::vector<AvbdContact> avbd_contacts_;
     std::vector<Vec3f> inertial_positions_;
     std::vector<Quatf> inertial_rotations_;

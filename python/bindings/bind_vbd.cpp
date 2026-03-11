@@ -10,7 +10,7 @@ void bind_vbd(py::module_& m) {
     using namespace novaphy;
 
     py::class_<VBDConfig>(m, "VBDConfig", R"pbdoc(
-        VBD/AVBD 配置，与 avbd-demo3d 的 dt/gravity/iterations/alpha/gamma/beta_linear/beta_angular 对齐。
+        VBD/AVBD configuration aligned with avbd-demo3d (dt/gravity/iterations/alpha/gamma/beta_*).
     )pbdoc")
         .def(py::init<>())
         .def_readwrite("dt", &VBDConfig::dt)
@@ -23,13 +23,17 @@ void bind_vbd(py::module_& m) {
             "接触约束 penalty 增长系数 (demo: betaLin=10000).")
         .def_readwrite("beta_angular", &VBDConfig::beta_angular,
             "关节约束 penalty 增长系数 (demo: betaAng=100).")
+        .def_readwrite("initial_penalty", &VBDConfig::initial_penalty)
+        .def_readwrite("velocity_smoothing", &VBDConfig::velocity_smoothing)
+        .def_readwrite("primal_relaxation", &VBDConfig::primal_relaxation)
+        .def_readwrite("lhs_regularization", &VBDConfig::lhs_regularization)
         .def("__repr__", [](const VBDConfig& c) {
             return "<VBDConfig dt=" + std::to_string(c.dt) +
                    " iterations=" + std::to_string(c.iterations) + ">";
         });
 
     py::class_<VBDWorld>(m, "VBDWorld", R"pbdoc(
-        VBD/AVBD 仿真世界。
+        VBD/AVBD simulation world.
     )pbdoc")
         .def(py::init<const Model&, const VBDConfig&>(),
              py::arg("model"),

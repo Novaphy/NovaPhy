@@ -1,13 +1,10 @@
-"""Demo: box stack matching avbd-demo3d sceneStack() exactly.
+"""Demo: stack with doubling box sizes (avbd-demo3d sceneStackRatio).
 
-Mirrors scenes.h sceneStack():
-  - Ground: Rigid({100, 100, 1}, 0, 0.5f, {0,0,0})  → Y-up: center (0,0,0), half (50, 0.5, 50), top y=0.5
-  - 15 boxes: Rigid({1,1,1}, 1, 0.5f, {0, 0, i*1.5+1})  → Y-up: (0, i*1.5+1, 0), half (0.5,0.5,0.5)
-  - First box bottom = 0.5, ground top = 0.5 → just touching.
+Layout matches scenes.h sceneStackRatio(): ground box then 4 boxes (sizes 1, 2, 4, 8) already stacked at rest.
 
 Usage:
-    python demos/demo_vbd_stack.py
-    python demos/demo_vbd_stack.py --headless
+    python demos/demo_vbd_stack_ratio.py
+    python demos/demo_vbd_stack_ratio.py --headless
 """
 
 import sys
@@ -25,11 +22,12 @@ except ImportError:
 
 
 def build_vbd_world():
-    """Build scene identical to avbd-demo3d sceneStack(); same config as pyramid (no extra tuning)."""
+    """Build scene identical to avbd-demo3d sceneStackRatio()."""
     builder = novaphy.ModelBuilder()
 
-    # Ground: demo3d-style static box, top y=0.5, friction 0.5 (box-box contact is supported)
-    half_ground = np.array([50.0, 0.5, 50.0], dtype=np.float32)
+    # Ground: demo3d {100, 100, groundThickness=1} at {0,0,0} → Y-up center (0,0,0), half (50, 0.5, 50), top y=0.5
+    ground_thickness = 1.0
+    half_ground = np.array([50.0, ground_thickness * 0.5, 50.0], dtype=np.float32)
     ground_body = novaphy.RigidBody.make_static()
     ground_t = novaphy.Transform.from_translation(np.array([0.0, 0.0, 0.0], dtype=np.float32))
     ground_idx = builder.add_body(ground_body, ground_t)
@@ -38,21 +36,25 @@ def build_vbd_world():
     )
     builder.add_shape(ground_shape)
 
-    # 15 boxes: demo3d {1,1,1} at {0, 0, i*1.5+1} → Y-up (0, i*1.5+1, 0), half (0.5, 0.5, 0.5), friction 0.5
-    half = np.array([0.5, 0.5, 0.5], dtype=np.float32)
-    for i in range(15):
-        body = novaphy.RigidBody.from_box(1.0, half)
-        y = i * 1.5 + 1.0
-        t = novaphy.Transform.from_translation(np.array([0.0, y, 0.0], dtype=np.float32))
+    # 4 boxes: sizes 1, 2, 4, 8, placed at rest like demo3d (topY = 0.5, centerY = topY+half, topY = centerY+half, s*=2)
+    top_y = 0.5
+    s = 1.0
+    for i in range(4):
+        half = s * 0.5
+        center_y = top_y + half
+        half_arr = np.array([half, half, half], dtype=np.float32)
+        body = novaphy.RigidBody.from_box(1.0, half_arr)
+        t = novaphy.Transform.from_translation(np.array([0.0, center_y, 0.0], dtype=np.float32))
         body_idx = builder.add_body(body, t)
         shape = novaphy.CollisionShape.make_box(
-            half, body_idx, novaphy.Transform.identity(), 0.5, 0.0
+            half_arr, body_idx, novaphy.Transform.identity(), 0.5, 0.0
         )
         builder.add_shape(shape)
+        top_y = center_y + half
+        s *= 2.0
 
     model = builder.build()
 
-    # Same config as pyramid (demo3d defaults: 10 iter, alpha 0.99 in solver; we use 0.995 like pyramid)
     cfg = novaphy.VBDConfig()
     cfg.dt = 1.0 / 60.0
     cfg.iterations = 10
@@ -85,12 +87,12 @@ class _VBDWorldAdapter:
         self._w.step()
 
 
-class VBDStackDemo:
-    """VBD box stack (avbd-demo3d sceneStack)."""
+class VBDStackRatioDemo:
+    """VBD stack with size ratio 1:2:4:8 (avbd-demo3d sceneStackRatio)."""
     def __init__(self):
-        self.title = "NovaPhy - VBD Stack (demo3d sceneStack)"
-        self.dt = 1.0 / 60.0
-        self.ground_size = 10.0
+        self.title = "NovaPhy - VBD Stack Ratio (demo3d sceneStackRatio)"
+        self.dt = 1.0 / 120.0
+        self.ground_size = 20.0
         self.world = None
         self.viz = None
 
@@ -111,8 +113,8 @@ class VBDStackDemo:
         ps.set_program_name(self.title)
         ps.set_up_dir("y_up")
         ps.set_ground_plane_mode("shadow_only")
-        # Closer default camera for tall stack.
-        ps.look_at((5.0, 3.0, 6.0), (0.0, 3.0, 0.0))
+        # Closer default camera for 4-box stack ratio.
+        ps.look_at((8.0, 5.0, 8.0), (0.0, 4.0, 0.0))
         from novaphy.viz import SceneVisualizer
         self.viz = SceneVisualizer(self.world, self.ground_size)
         def callback():
@@ -122,21 +124,18 @@ class VBDStackDemo:
         ps.show()
 
     def _run_headless(self, steps=300):
-        print("Running VBD stack (demo3d sceneStack) headless...")
+        print("Running VBD stack ratio (demo3d sceneStackRatio) headless...")
         n = self.world.model.num_bodies
         for step in range(steps):
             self.world.step(self.dt)
             if step % 60 == 0 or step == steps - 1:
                 state = self.world.state
                 ys = [state.transforms[i].position[1] for i in range(n)]
-                head = [f"{y:.3f}" for y in ys[:5]]
-                tail = [f"{y:.3f}" for y in ys[-3:]] if n > 8 else []
-                part = head + (["..."] if n > 8 else []) + tail
-                print(f"step {step:4d}: n={n} y = {part}")
+                print(f"step {step:4d}: n={n} y = {[f'{y:.3f}' for y in ys]}")
         print("Done.")
 
 
 if __name__ == "__main__":
     headless = "--headless" in sys.argv
-    demo = VBDStackDemo()
+    demo = VBDStackRatioDemo()
     demo.run(headless=headless)

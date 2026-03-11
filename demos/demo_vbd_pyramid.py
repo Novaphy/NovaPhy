@@ -27,21 +27,20 @@ except ImportError:
 
 def build_vbd_pyramid_world():
     """Build a fixed 5-layer pyramid scene matching avbd-demo3d scenePyramid."""
-    SIZE = 16
+    SIZE = 6
     builder = novaphy.ModelBuilder()
 
 
-   # Ground box (match avbd-demo3d: large static box instead of infinite plane)
+    # Ground: demo3d-style static box, top y=0 (center -0.5, half 0.5)
     half_ground = np.array([50.0, 0.5, 50.0], dtype=np.float32)
     ground_body = novaphy.RigidBody.make_static()
-    ground_t = novaphy.Transform.from_translation(
-        np.array([0.0, -0.5, 0.0], dtype=np.float32)
-    )
+    ground_t = novaphy.Transform.from_translation(np.array([0.0, -0.5, 0.0], dtype=np.float32))
     ground_idx = builder.add_body(ground_body, ground_t)
     ground_shape = novaphy.CollisionShape.make_box(
-        half_ground, ground_idx, novaphy.Transform.identity(), 0.9, 0.0
+        half_ground, ground_idx, novaphy.Transform.identity(), 0.5, 0.0
     )
     builder.add_shape(ground_shape)
+
     # Box full size (1, 0.5, 0.5) → half-extents
     half = np.array([0.5, 0.25, 0.25], dtype=np.float32)
     for row in range(SIZE):
@@ -63,15 +62,16 @@ def build_vbd_pyramid_world():
     model = builder.build()
 
     cfg = novaphy.VBDConfig()
-    # Use a smaller dt for better stacking stability (especially when SIZE is increased).
-    cfg.dt = 1.0 / 120.0
-    cfg.iterations = 30
-    cfg.max_contacts_per_pair = 8  
+    cfg.dt = 1.0 / 60.0
+    cfg.iterations = 10
+    cfg.max_contacts_per_pair = 8
     cfg.gravity = np.array([0.0, -10.0, 0.0], dtype=np.float32)
-    cfg.alpha = 0.99
+    cfg.alpha = 0.995
     cfg.gamma = 0.999
     cfg.beta_linear = 10000.0
     cfg.beta_angular = 100.0
+    cfg.primal_relaxation = 0.92
+    cfg.lhs_regularization = 1e-6
 
     world = novaphy.VBDWorld(model, cfg)
     return world
@@ -124,6 +124,8 @@ class VBDPyramidDemo:
         ps.set_program_name(self.title)
         ps.set_up_dir("y_up")
         ps.set_ground_plane_mode("shadow_only")
+        # Closer default camera for pyramid.
+        ps.look_at((0.0, 2.0, 10.0), (0.0, 2.0, 0.0))
 
         from novaphy.viz import SceneVisualizer
         self.viz = SceneVisualizer(self.world, self.ground_size)
