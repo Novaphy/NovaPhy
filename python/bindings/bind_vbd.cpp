@@ -1,5 +1,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/eigen.h>
+#include <limits>
 
 #include "novaphy/vbd/vbd_config.h"
 #include "novaphy/vbd/vbd_world.h"
@@ -39,8 +40,25 @@ void bind_vbd(py::module_& m) {
              py::arg("model"),
              py::arg("config") = VBDConfig{})
         .def("step", &VBDWorld::step)
+        .def("clear_forces", &VBDWorld::clear_forces)
+        .def("add_ignore_collision", &VBDWorld::add_ignore_collision,
+             py::arg("body_a"), py::arg("body_b"))
+        .def("add_joint", &VBDWorld::add_joint,
+             py::arg("body_a"), py::arg("body_b"),
+             py::arg("rA"), py::arg("rB"),
+             py::arg("stiffnessLin") = std::numeric_limits<float>::infinity(),
+             py::arg("stiffnessAng") = 0.0f,
+             py::arg("fracture") = std::numeric_limits<float>::infinity())
+        .def("add_spring", &VBDWorld::add_spring,
+             py::arg("body_a"), py::arg("body_b"),
+             py::arg("rA"), py::arg("rB"),
+             py::arg("stiffness"),
+             py::arg("rest") = -1.0f)
         .def_property_readonly("state", py::overload_cast<>(&VBDWorld::state, py::const_),
              py::return_value_policy::reference_internal)
+        .def_property_readonly("state_mut", py::overload_cast<>(&VBDWorld::state),
+             py::return_value_policy::reference_internal,
+             "Mutable state view (allows setting initial velocities).")
         .def_property_readonly("model", &VBDWorld::model,
              py::return_value_policy::reference_internal)
         .def_property_readonly("config", &VBDWorld::config,

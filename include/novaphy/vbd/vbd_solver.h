@@ -9,7 +9,9 @@
 #include "novaphy/math/math_types.h"
 #include "novaphy/math/spatial.h"
 #include "novaphy/vbd/vbd_collide.h"
+#include "novaphy/vbd/vbd_forces.h"
 
+#include <limits>
 #include <vector>
 
 namespace novaphy {
@@ -53,6 +55,18 @@ public:
 
     void set_model(const Model& model);
 
+    // demo3d-style constraints/forces
+    void clear_forces();
+    void add_ignore_collision(int body_a, int body_b);
+    int add_joint(int body_a, int body_b,
+                  const Vec3f& rA, const Vec3f& rB,
+                  float stiffnessLin = std::numeric_limits<float>::infinity(),
+                  float stiffnessAng = 0.0f,
+                  float fracture = std::numeric_limits<float>::infinity());
+    int add_spring(int body_a, int body_b,
+                   const Vec3f& rA, const Vec3f& rB,
+                   float stiffness, float rest = -1.0f);
+
     /**
      * @brief One AVBD step (matches demo3d Solver::step()).
      */
@@ -70,6 +84,9 @@ private:
     VBDConfig config_;
     SweepAndPrune broadphase_;
     std::vector<AvbdContact> avbd_contacts_;
+    std::vector<AvbdIgnoreCollision> ignore_collisions_;
+    std::vector<AvbdJoint> joints_;
+    std::vector<AvbdSpring> springs_;
     std::vector<Vec3f> inertial_positions_;
     std::vector<Quatf> inertial_rotations_;
     std::vector<Vec3f> initial_positions_;

@@ -4,6 +4,7 @@
 #include "novaphy/sim/state.h"
 #include "novaphy/vbd/vbd_config.h"
 
+#include <limits>
 #include <memory>
 
 namespace novaphy {
@@ -45,6 +46,18 @@ public:
      * object. This public method remains a simple `step()` call.
      */
     void step();
+
+    // demo3d-style AVBD constraints/forces
+    void clear_forces();
+    void add_ignore_collision(int body_a, int body_b);
+    int add_joint(int body_a, int body_b,
+                  const Vec3f& rA, const Vec3f& rB,
+                  float stiffnessLin = std::numeric_limits<float>::infinity(),
+                  float stiffnessAng = 0.0f,
+                  float fracture = std::numeric_limits<float>::infinity());
+    int add_spring(int body_a, int body_b,
+                   const Vec3f& rA, const Vec3f& rB,
+                   float stiffness, float rest = -1.0f);
 
     /// Access current simulation state (positions, velocities).
     SimState& state();

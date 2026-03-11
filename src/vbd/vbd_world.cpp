@@ -34,6 +34,24 @@ void VBDWorld::step() {
     impl_->step_one();
 }
 
+void VBDWorld::clear_forces() { impl_->solver.clear_forces(); }
+
+void VBDWorld::add_ignore_collision(int body_a, int body_b) {
+    impl_->solver.add_ignore_collision(body_a, body_b);
+}
+
+int VBDWorld::add_joint(int body_a, int body_b,
+                        const Vec3f& rA, const Vec3f& rB,
+                        float stiffnessLin, float stiffnessAng, float fracture) {
+    return impl_->solver.add_joint(body_a, body_b, rA, rB, stiffnessLin, stiffnessAng, fracture);
+}
+
+int VBDWorld::add_spring(int body_a, int body_b,
+                         const Vec3f& rA, const Vec3f& rB,
+                         float stiffness, float rest) {
+    return impl_->solver.add_spring(body_a, body_b, rA, rB, stiffness, rest);
+}
+
 SimState& VBDWorld::state() { return impl_->state; }
 const SimState& VBDWorld::state() const { return impl_->state; }
 

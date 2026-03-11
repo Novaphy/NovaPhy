@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <tuple>
 #include <unordered_map>
+#include <limits>
 #include <vector>
  
  namespace novaphy {
@@ -52,6 +53,15 @@ constexpr float STICK_THRESH = 0.00001f;
      return h;
  }
  
+ inline uint64_t pair_key(int a, int b) {
+     int lo = std::min(a, b);
+     int hi = std::max(a, b);
+     uint64_t h = 1469598103934665603ull;
+     h = fnv1a_u64(h, static_cast<uint64_t>(static_cast<uint32_t>(lo + 2)));
+     h = fnv1a_u64(h, static_cast<uint64_t>(static_cast<uint32_t>(hi + 2)));
+     return h;
+ }
+
 /** Integrate quaternion using world-space angular velocity (first-order). */
  inline Quatf quat_add_omega_dt(const Quatf& q, const Vec3f& omega, float dt) {
      // Match demo3d: first-order quaternion integration using world-space angular velocity.
@@ -69,6 +79,13 @@ constexpr float STICK_THRESH = 0.00001f;
      Quatf dq = q * q0.inverse();
      dq.normalize();
      if (dq.w() < 0.0f) dq.coeffs() *= -1.0f;  // shortest arc
+     return 2.0f * Vec3f(dq.x(), dq.y(), dq.z());
+ }
+
+ // demo3d quat operator-(a,b): (a*inverse(b)).vec() * 2, no shortest-arc flip.
+ inline Vec3f quat_diff_vec_demo3d(const Quatf& a, const Quatf& b) {
+     Quatf dq = a * b.inverse();
+     dq.normalize();
      return 2.0f * Vec3f(dq.x(), dq.y(), dq.z());
  }
  
@@ -100,12 +117,60 @@ constexpr float STICK_THRESH = 0.00001f;
  void VbdSolver::set_model(const Model&) {
     // No-op: contacts are rebuilt from collision detection every step.
  }
+
+ void VbdSolver::clear_forces() {
+     ignore_collisions_.clear();
+     joints_.clear();
+     springs_.clear();
+ }
+
+ void VbdSolver::add_ignore_collision(int body_a, int body_b) {
+     AvbdIgnoreCollision ic;
+     ic.body_a = body_a;
+     ic.body_b = body_b;
+     ignore_collisions_.push_back(ic);
+ }
+
+ int VbdSolver::add_joint(int body_a, int body_b, const Vec3f& rA, const Vec3f& rB,
+                          float stiffnessLin, float stiffnessAng, float fracture) {
+     AvbdJoint j;
+     j.body_a = body_a;
+     j.body_b = body_b;
+     j.rA = rA;
+     j.rB = rB;
+     j.stiffnessLin = stiffnessLin;
+     j.stiffnessAng = stiffnessAng;
+     j.fracture = fracture;
+     joints_.push_back(j);
+     return static_cast<int>(joints_.size()) - 1;
+ }
+
+ int VbdSolver::add_spring(int body_a, int body_b, const Vec3f& rA, const Vec3f& rB,
+                           float stiffness, float rest) {
+     AvbdSpring s;
+     s.body_a = body_a;
+     s.body_b = body_b;
+     s.rA = rA;
+     s.rB = rB;
+     s.stiffness = stiffness;
+     s.rest = rest;
+     springs_.push_back(s);
+     return static_cast<int>(springs_.size()) - 1;
+ }
  
  void VbdSolver::build_contact_constraints(const Model& model, const SimState& state) {
      const int n = model.num_bodies();
      const int num_shapes = model.num_shapes();
      std::vector<AABB> shape_aabbs(num_shapes);
      std::vector<bool> shape_static(num_shapes);
+
+     // Build ignore-collision set (body index pairs).
+     std::unordered_map<uint64_t, bool> ignore_pair;
+     ignore_pair.reserve(ignore_collisions_.size() * 2 + 8);
+     for (const auto& ic : ignore_collisions_) {
+         if (ic.body_a >= 0 && ic.body_b >= 0)
+             ignore_pair[pair_key(ic.body_a, ic.body_b)] = true;
+     }
 
      std::unordered_map<uint64_t, WarmstartContactData> old_cache;
      old_cache.reserve(avbd_contacts_.size() * 2 + 8);
@@ -145,6 +210,10 @@ constexpr float STICK_THRESH = 0.00001f;
          bool valid_b = (ib >= 0 && ib < n);
          if (valid_a && valid_b && model.bodies[ia].is_static() && model.bodies[ib].is_static())
              continue;
+         if (valid_a && valid_b) {
+             if (ignore_pair.find(pair_key(ia, ib)) != ignore_pair.end())
+                 continue;
+         }
 
          Transform wa = (ia >= 0) ? state.transforms[ia] * sa.local_transform : Transform::identity();
          Transform wb = (ib >= 0) ? state.transforms[ib] * sb.local_transform : Transform::identity();
@@ -237,6 +306,32 @@ constexpr float STICK_THRESH = 0.00001f;
                   return arB < brB;
               });
  }
+
+ namespace {
+ inline Mat3f diagonalize(const Mat3f& m) {
+     // demo3d: diagonal(length(col0), length(col1), length(col2))
+     Vec3f d(m.col(0).norm(), m.col(1).norm(), m.col(2).norm());
+     return d.asDiagonal();
+ }
+
+ inline Mat3f geometricStiffnessBallSocket(int k, const Vec3f& v) {
+     Mat3f m = (-v[k]) * Mat3f::Identity();
+     m(0, k) += v.x();
+     m(1, k) += v.y();
+     m(2, k) += v.z();
+     return m;
+ }
+
+ inline Vec3f world_point(const SimState& state, int body, const Vec3f& r_local_or_world) {
+     if (body < 0) return r_local_or_world;
+     return state.transforms[body].transform_point(r_local_or_world);
+ }
+
+ inline Vec3f world_dir(const SimState& state, int body, const Vec3f& r_local) {
+     if (body < 0) return r_local;
+     return state.transforms[body].rotation * r_local;
+ }
+ }  // namespace
  
  void VbdSolver::avbd_primal(const Model& model, SimState& state) {
      const int n = model.num_bodies();
@@ -270,12 +365,11 @@ constexpr float STICK_THRESH = 0.00001f;
          Vec3f rot_err = quat_small_angle_diff_vec(rot, inertial_rotations_[bi]);  // current - inertial
          Vec3f rhsAng = (MAng / dt2) * rot_err;
  
-         int num_contacts_on_body = 0;
+         // --- Contact constraints (manifolds) ---
          for (const AvbdContact& ac : avbd_contacts_) {
              bool onA = (ac.body_a == bi);
              bool onB = (ac.body_b == bi);
              if (!onA && !onB) continue;
-             ++num_contacts_on_body;
  
              // World-space contact arms for both bodies (needed for C and for jAAng/jBAng).
              Vec3f rA_w = (ac.body_a >= 0) ? state.transforms[ac.body_a].rotation * ac.rA : (ac.body_a == -1 ? ac.rA : Vec3f::Zero());
@@ -333,6 +427,106 @@ constexpr float STICK_THRESH = 0.00001f;
              lhsCross += jAngTk * jLin;
              rhsLin += jLinT * F;
              rhsAng += jAngT * F;
+         }
+
+         // --- Joint constraints (demo3d Joint) ---
+         for (const AvbdJoint& j : joints_) {
+             if (j.broken) continue;
+             bool onA = (j.body_a == bi);
+             bool onB = (j.body_b == bi);
+             if (!onA && !onB) continue;
+
+             // Linear part
+             if (j.penaltyLin.squaredNorm() > 0.0f) {
+                 Mat3f K = j.penaltyLin.asDiagonal();
+                 Vec3f xA = world_point(state, j.body_a, j.rA);
+                 Vec3f xB = world_point(state, j.body_b, j.rB);
+                 Vec3f C = xA - xB;
+                 if (std::isinf(j.stiffnessLin)) C -= j.C0Lin * alpha;
+                 Vec3f F = K * C + j.lambdaLin;
+
+                 Mat3f jLin;
+                 if (onA) jLin.setIdentity();
+                 else jLin = -Mat3f::Identity();
+                 Vec3f rA_w = world_dir(state, j.body_a, j.rA);
+                 Vec3f rB_w = world_dir(state, j.body_b, j.rB);
+                 Mat3f jAng;
+                 if (onA) jAng = novaphy::skew(-rA_w);
+                 else jAng = novaphy::skew(rB_w);
+
+                 Mat3f jLinT = jLin.transpose();
+                 Mat3f jAngT = jAng.transpose();
+                 Mat3f jAngTk = jAngT * K;
+
+                 lhsLin += jLinT * K * jLin;
+                 lhsAng += jAngTk * jAng;
+                 lhsCross += jAngTk * jLin;
+
+                 Vec3f r = onA ? rA_w : -rB_w;
+                 Mat3f H = geometricStiffnessBallSocket(0, r) * F.x()
+                         + geometricStiffnessBallSocket(1, r) * F.y()
+                         + geometricStiffnessBallSocket(2, r) * F.z();
+                 lhsAng += diagonalize(H);
+
+                 rhsLin += jLinT * F;
+                 rhsAng += jAngT * F;
+             }
+
+             // Angular part
+             if (j.penaltyAng.squaredNorm() > 0.0f) {
+                 Mat3f K = j.penaltyAng.asDiagonal();
+                 Quatf qA = (j.body_a >= 0) ? state.transforms[j.body_a].rotation : Quatf::Identity();
+                 Quatf qB = (j.body_b >= 0) ? state.transforms[j.body_b].rotation : Quatf::Identity();
+                 Vec3f C = quat_diff_vec_demo3d(qA, qB) * j.torqueArm;
+                 if (std::isinf(j.stiffnessAng)) C -= j.C0Ang * alpha;
+                 Vec3f F = K * C + j.lambdaAng;
+                 Mat3f jAng;
+                 if (onA) jAng.setIdentity();
+                 else jAng = -Mat3f::Identity();
+                 jAng *= j.torqueArm;
+                 lhsAng += jAng.transpose() * K * jAng;
+                 rhsAng += jAng.transpose() * F;
+             }
+         }
+
+         // --- Spring forces (demo3d Spring) ---
+         for (const AvbdSpring& s : springs_) {
+             bool onA = (s.body_a == bi);
+             bool onB = (s.body_b == bi);
+             if (!onA && !onB) continue;
+             if (s.body_a < 0 || s.body_b < 0) continue;  // springs are body-body in demo3d
+
+             Vec3f pA = state.transforms[s.body_a].transform_point(s.rA);
+             Vec3f pB = state.transforms[s.body_b].transform_point(s.rB);
+             Vec3f d = pA - pB;
+             float dLen = d.norm();
+             if (dLen <= 1.0e-6f) continue;
+             Vec3f nrm = d / dLen;
+             float rest = s.rest;
+             if (rest < 0.0f) rest = dLen;
+             float C = dLen - rest;
+             float f = s.stiffness * C;
+
+             Vec3f rWorld, jLin_v, jAng_v;
+             if (onA) {
+                 rWorld = state.transforms[s.body_a].rotation * s.rA;
+                 jLin_v = nrm;
+                 jAng_v = rWorld.cross(nrm);
+             } else {
+                 rWorld = state.transforms[s.body_b].rotation * s.rB;
+                 jLin_v = -nrm;
+                 jAng_v = -rWorld.cross(nrm);
+             }
+             Vec3f F = jLin_v * f;
+             Vec3f Tau = jAng_v * f;
+             Mat3f Kll = (jLin_v * jLin_v.transpose()) * s.stiffness;
+             Mat3f Kla = (jAng_v * jLin_v.transpose()) * s.stiffness;
+             Mat3f Kaa = (jAng_v * jAng_v.transpose()) * s.stiffness;
+             lhsLin += Kll;
+             lhsAng += Kaa;
+             lhsCross += Kla;
+             rhsLin += F;
+             rhsAng += Tau;
          }
  
         // Solve with RHS = [-rhsLin; -rhsAng] (demo3d).
@@ -430,6 +624,60 @@ constexpr float STICK_THRESH = 0.00001f;
              ac.stick = (Vec2f(C(1), C(2)).norm() < STICK_THRESH);
          }
      }
+
+     // Joint dual update (demo3d Joint::updateDual)
+     for (AvbdJoint& j : joints_) {
+         if (j.broken) continue;
+         int ia = j.body_a;
+         int ib = j.body_b;
+         bool dynA = (ia >= 0 && ia < n) && !model.bodies[ia].is_static();
+         bool dynB = (ib >= 0 && ib < n) && !model.bodies[ib].is_static();
+         if (!dynA && !dynB) continue;
+
+         // Linear
+         if (j.penaltyLin.squaredNorm() > 0.0f) {
+             Mat3f K = j.penaltyLin.asDiagonal();
+             Vec3f xA = world_point(state, ia, j.rA);
+             Vec3f xB = world_point(state, ib, j.rB);
+             Vec3f C = xA - xB;
+             if (std::isinf(j.stiffnessLin)) {
+                 C -= j.C0Lin * alpha;
+                 Vec3f F = K * C + j.lambdaLin;
+                 j.lambdaLin = F;
+             }
+             Vec3f absC = C.cwiseAbs();
+             j.penaltyLin = (j.penaltyLin + absC * config_.beta_linear).cwiseMin(
+                 Vec3f(std::min(j.stiffnessLin, PENALTY_MAX),
+                       std::min(j.stiffnessLin, PENALTY_MAX),
+                       std::min(j.stiffnessLin, PENALTY_MAX)));
+         }
+
+         // Angular
+         if (j.penaltyAng.squaredNorm() > 0.0f) {
+             Mat3f K = j.penaltyAng.asDiagonal();
+             Quatf qA = (ia >= 0) ? state.transforms[ia].rotation : Quatf::Identity();
+             Quatf qB = (ib >= 0) ? state.transforms[ib].rotation : Quatf::Identity();
+             Vec3f C = quat_diff_vec_demo3d(qA, qB) * j.torqueArm;
+             if (std::isinf(j.stiffnessAng)) {
+                 C -= j.C0Ang * alpha;
+                 Vec3f F = K * C + j.lambdaAng;
+                 j.lambdaAng = F;
+             }
+             Vec3f absC = C.cwiseAbs();
+             j.penaltyAng = (j.penaltyAng + absC * config_.beta_angular).cwiseMin(
+                 Vec3f(std::min(j.stiffnessAng, PENALTY_MAX),
+                       std::min(j.stiffnessAng, PENALTY_MAX),
+                       std::min(j.stiffnessAng, PENALTY_MAX)));
+         }
+
+         if (j.lambdaAng.squaredNorm() > j.fracture * j.fracture) {
+             j.penaltyLin.setZero();
+             j.penaltyAng.setZero();
+             j.lambdaLin.setZero();
+             j.lambdaAng.setZero();
+             j.broken = true;
+         }
+     }
  }
  
  void VbdSolver::step(const Model& model, SimState& state) {
@@ -453,6 +701,56 @@ constexpr float STICK_THRESH = 0.00001f;
  
     // 1) Broadphase + contacts + C0 + warmstart
      build_contact_constraints(model, state);
+
+     // 1.5) Initialize and warmstart joints/springs (demo3d Force::initialize)
+     // Approximate torqueArm using body box sizes (demo3d uses lengthSq(sizeA + sizeB)).
+     std::vector<Vec3f> body_size(static_cast<size_t>(n), Vec3f::Zero());
+     for (const auto& shape : model.shapes) {
+         if (shape.body_index < 0 || shape.body_index >= n) continue;
+         if (shape.type != ShapeType::Box) continue;
+         Vec3f full = shape.box.half_extents * 2.0f;
+         body_size[static_cast<size_t>(shape.body_index)] = body_size[static_cast<size_t>(shape.body_index)].cwiseMax(full);
+     }
+
+     for (AvbdJoint& j : joints_) {
+         if (j.broken) continue;
+         Vec3f szA = (j.body_a >= 0 && j.body_a < n) ? body_size[static_cast<size_t>(j.body_a)] : Vec3f::Zero();
+         Vec3f szB = (j.body_b >= 0 && j.body_b < n) ? body_size[static_cast<size_t>(j.body_b)] : Vec3f::Zero();
+         j.torqueArm = (szA + szB).squaredNorm();
+         if (!(j.torqueArm > 0.0f)) j.torqueArm = 1.0f;
+
+         Vec3f xA = world_point(state, j.body_a, j.rA);
+         Vec3f xB = world_point(state, j.body_b, j.rB);
+         j.C0Lin = xA - xB;
+         Quatf qA = (j.body_a >= 0 && j.body_a < n) ? state.transforms[j.body_a].rotation : Quatf::Identity();
+         Quatf qB = (j.body_b >= 0 && j.body_b < n) ? state.transforms[j.body_b].rotation : Quatf::Identity();
+         j.C0Ang = quat_diff_vec_demo3d(qA, qB) * j.torqueArm;
+
+         j.lambdaLin = j.lambdaLin * config_.alpha * config_.gamma;
+         j.lambdaAng = j.lambdaAng * config_.alpha * config_.gamma;
+         // demo3d: warmstart clamps penalty to [PENALTY_MIN, PENALTY_MAX] so constraints activate on first step.
+         j.penaltyLin = (j.penaltyLin * config_.gamma).cwiseMax(Vec3f(PENALTY_MIN, PENALTY_MIN, PENALTY_MIN))
+                                              .cwiseMin(Vec3f(PENALTY_MAX, PENALTY_MAX, PENALTY_MAX));
+         j.penaltyAng = (j.penaltyAng * config_.gamma).cwiseMax(Vec3f(PENALTY_MIN, PENALTY_MIN, PENALTY_MIN))
+                                              .cwiseMin(Vec3f(PENALTY_MAX, PENALTY_MAX, PENALTY_MAX));
+
+         float stiffLin = j.stiffnessLin;
+         float stiffAng = j.stiffnessAng;
+         if (std::isfinite(stiffLin)) {
+             j.penaltyLin = j.penaltyLin.cwiseMin(Vec3f(stiffLin, stiffLin, stiffLin));
+         }
+         if (std::isfinite(stiffAng)) {
+             j.penaltyAng = j.penaltyAng.cwiseMin(Vec3f(stiffAng, stiffAng, stiffAng));
+         }
+     }
+
+     for (AvbdSpring& s : springs_) {
+         if (s.rest < 0.0f && s.body_a >= 0 && s.body_b >= 0 && s.body_a < n && s.body_b < n) {
+             Vec3f pA = state.transforms[s.body_a].transform_point(s.rA);
+             Vec3f pB = state.transforms[s.body_b].transform_point(s.rB);
+             s.rest = (pA - pB).norm();
+         }
+     }
  
     // 2) Initialize bodies (inertial state + initial)
      for (int i = 0; i < n; ++i) {
