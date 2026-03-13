@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "novaphy/math/math_types.h"
+#include "novaphy/core/contact.h"
 
 namespace novaphy {
 
@@ -125,7 +126,7 @@ struct SimState {
      * @param [in] contacts Contact points for the current step.
      * @return void
      */
-    void build_islands(const std::vector<class ContactPoint>& contacts);
+    void build_islands(const std::vector<ContactPoint>& contacts);
 
     /**
      * @brief Evaluate sleep state based on energy thresholds.
