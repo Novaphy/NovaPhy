@@ -25,6 +25,10 @@ def _add_dll_directories():
             _bin_dir = _d / "Release" / "bin"
             if _bin_dir.is_dir():
                 _os.add_dll_directory(str(_bin_dir))
+            # VBD/CUDA backend: novaphy_vbd.dll may be in src/vbd (build tree)
+            _vbd_dir = _d / "src" / "vbd"
+            if _vbd_dir.is_dir():
+                _os.add_dll_directory(str(_vbd_dir))
             _vcpkg_bin = _d / "vcpkg_installed" / "x64-windows" / "bin"
             if _vcpkg_bin.is_dir():
                 _os.add_dll_directory(str(_vcpkg_bin))
@@ -49,6 +53,15 @@ def _add_dll_directories():
                     ctypes.CDLL(str(_so), mode=ctypes.RTLD_GLOBAL)
                 except OSError:
                     pass
+        # Preload libnovaphy_vbd.so (VBD CUDA backend) so _core.so can resolve it.
+        for _d in sorted(_build_root.glob("cp*-linux_*"), reverse=True):
+            _vbd_so = _d / "src" / "vbd" / "libnovaphy_vbd.so"
+            if _vbd_so.is_file():
+                try:
+                    ctypes.CDLL(str(_vbd_so), mode=ctypes.RTLD_GLOBAL)
+                except OSError:
+                    pass
+                break
 
 _add_dll_directories()
 
@@ -130,6 +143,7 @@ from novaphy._core import (
     # VBD/AVBD
     VBDConfig,
     VBDWorld,
+    VbdBackend,
 )
 
 # Optional IPC support (requires CUDA + libuipc)
@@ -210,6 +224,7 @@ __all__ = [
     # VBD/AVBD
     "VBDConfig",
     "VBDWorld",
+    "VbdBackend",
 ]
 
 # Conditionally export IPC symbols

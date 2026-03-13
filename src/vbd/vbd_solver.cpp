@@ -107,16 +107,25 @@ constexpr float STICK_THRESH = 0.00001f;
 
  }  // namespace
  
- VbdSolver::VbdSolver(const VBDConfig& cfg)
-     : config_(cfg) {}
- 
- void VbdSolver::set_config(const VBDConfig& cfg) {
+VbdSolver::VbdSolver(const VBDConfig& cfg)
+    : config_(cfg) {}
+
+VbdSolver::~VbdSolver() {
+    release_cuda_buffers();
+}
+
+#ifndef NOVAPHY_VBD_CUDA
+// Stub when CUDA backend is not compiled (avoids undefined reference).
+void VbdSolver::release_cuda_buffers() {}
+#endif
+
+void VbdSolver::set_config(const VBDConfig& cfg) {
      config_ = cfg;
  }
  
- void VbdSolver::set_model(const Model&) {
-    // No-op: contacts are rebuilt from collision detection every step.
- }
+void VbdSolver::set_model(const Model&) {
+   // No-op: contacts are rebuilt from collision detection every step.
+}
 
  void VbdSolver::clear_forces() {
      ignore_collisions_.clear();
@@ -158,140 +167,112 @@ constexpr float STICK_THRESH = 0.00001f;
      return static_cast<int>(springs_.size()) - 1;
  }
  
- void VbdSolver::build_contact_constraints(const Model& model, const SimState& state) {
-     const int n = model.num_bodies();
-     const int num_shapes = model.num_shapes();
-     std::vector<AABB> shape_aabbs(num_shapes);
-     std::vector<bool> shape_static(num_shapes);
+namespace {
 
-     // Build ignore-collision set (body index pairs).
-     std::unordered_map<uint64_t, bool> ignore_pair;
-     ignore_pair.reserve(ignore_collisions_.size() * 2 + 8);
-     for (const auto& ic : ignore_collisions_) {
-         if (ic.body_a >= 0 && ic.body_b >= 0)
-             ignore_pair[pair_key(ic.body_a, ic.body_b)] = true;
-     }
-
-     std::unordered_map<uint64_t, WarmstartContactData> old_cache;
-     old_cache.reserve(avbd_contacts_.size() * 2 + 8);
-     for (const AvbdContact& oldc : avbd_contacts_) {
-         WarmstartContactData d;
-         d.rA = oldc.rA;
-         d.rB = oldc.rB;
-         d.penalty = oldc.penalty;
-         d.lambda = oldc.lambda;
-         d.stick = oldc.stick;
-         old_cache[contact_key(oldc)] = d;
-     }
-     avbd_contacts_.clear();
-
-     for (int si = 0; si < num_shapes; ++si) {
-         const auto& shape = model.shapes[si];
-         if (shape.body_index >= 0) {
-             shape_aabbs[si] = shape.compute_aabb(state.transforms[shape.body_index]);
-             shape_static[si] = model.bodies[shape.body_index].is_static();
-         } else {
-             shape_aabbs[si] = shape.compute_aabb(Transform::identity());
-             shape_static[si] = true;
-         }
-     }
-     broadphase_.update(shape_aabbs, shape_static);
-     const auto& pairs = broadphase_.get_pairs();
-
-     std::vector<VbdContactPoint> vbd_points;
+// Shared inner loop: given shape-index pairs, run narrowphase and fill avbd_contacts_
+// with warmstart and C0. Caller must have built ignore_pair and old_cache.
+void build_contacts_for_shape_pairs(
+    const Model& model, const SimState& state,
+    const std::vector<BroadPhasePair>& pairs,
+    const std::unordered_map<uint64_t, bool>& ignore_pair,
+    const std::unordered_map<uint64_t, WarmstartContactData>& old_cache,
+    std::vector<AvbdContact>& avbd_contacts_out,
+    const VBDConfig& config_) {
+    const int n = model.num_bodies();
+    std::vector<VbdContactPoint> vbd_points;
      vbd_points.reserve(static_cast<size_t>(config_.max_contacts_per_pair));
 
-     for (const auto& pair : pairs) {
-         const auto& sa = model.shapes[pair.body_a];
-         const auto& sb = model.shapes[pair.body_b];
-         int ia = sa.body_index;
-         int ib = sb.body_index;
-         bool valid_a = (ia >= 0 && ia < n);
-         bool valid_b = (ib >= 0 && ib < n);
-         if (valid_a && valid_b && model.bodies[ia].is_static() && model.bodies[ib].is_static())
-             continue;
-         if (valid_a && valid_b) {
-             if (ignore_pair.find(pair_key(ia, ib)) != ignore_pair.end())
-                 continue;
-         }
+    for (const auto& pair : pairs) {
+        const auto& sa = model.shapes[pair.body_a];
+        const auto& sb = model.shapes[pair.body_b];
+        int ia = sa.body_index;
+        int ib = sb.body_index;
+        bool valid_a = (ia >= 0 && ia < n);
+        bool valid_b = (ib >= 0 && ib < n);
+        if (valid_a && valid_b && model.bodies[ia].is_static() && model.bodies[ib].is_static())
+            continue;
+        if (valid_a && valid_b) {
+            if (ignore_pair.find(pair_key(ia, ib)) != ignore_pair.end())
+                continue;
+        }
 
-         Transform wa = (ia >= 0) ? state.transforms[ia] * sa.local_transform : Transform::identity();
-         Transform wb = (ib >= 0) ? state.transforms[ib] * sb.local_transform : Transform::identity();
+        Transform wa = (ia >= 0) ? state.transforms[ia] * sa.local_transform : Transform::identity();
+        Transform wb = (ib >= 0) ? state.transforms[ib] * sb.local_transform : Transform::identity();
 
-         Mat3f basis;
-         int num_contacts = 0;
-         if (sa.type == ShapeType::Box && sb.type == ShapeType::Box) {
-             num_contacts = vbd_collide_box_box(
-                 wa.position, wa.rotation, sa.box.half_extents,
-                 wb.position, wb.rotation, sb.box.half_extents,
-                 &vbd_points, &basis);
-         } else if (sa.type == ShapeType::Plane && sb.type == ShapeType::Box) {
-             num_contacts = vbd_collide_box_plane(
-                 sa.plane.normal, sa.plane.offset,
-                 wb.position, wb.rotation, sb.box.half_extents,
-                 &vbd_points, &basis);
-         } else if (sa.type == ShapeType::Box && sb.type == ShapeType::Plane) {
-             num_contacts = vbd_collide_box_plane(
-                 -sb.plane.normal, -sb.plane.offset,
-                 wa.position, wa.rotation, sa.box.half_extents,
-                 &vbd_points, &basis);
-             for (auto& p : vbd_points) {
-                 std::swap(p.rA, p.rB);
-             }
-         }
-         if (num_contacts <= 0) continue;
+        Mat3f basis;
+        int num_contacts = 0;
+        if (sa.type == ShapeType::Box && sb.type == ShapeType::Box) {
+            num_contacts = vbd_collide_box_box(
+                wa.position, wa.rotation, sa.box.half_extents,
+                wb.position, wb.rotation, sb.box.half_extents,
+                &vbd_points, &basis);
+        } else if (sa.type == ShapeType::Plane && sb.type == ShapeType::Box) {
+            num_contacts = vbd_collide_box_plane(
+                sa.plane.normal, sa.plane.offset,
+                wb.position, wb.rotation, sb.box.half_extents,
+                &vbd_points, &basis);
+        } else if (sa.type == ShapeType::Box && sb.type == ShapeType::Plane) {
+            num_contacts = vbd_collide_box_plane(
+                -sb.plane.normal, -sb.plane.offset,
+                wa.position, wa.rotation, sa.box.half_extents,
+                &vbd_points, &basis);
+            for (auto& p : vbd_points) {
+                std::swap(p.rA, p.rB);
+            }
+        }
+        if (num_contacts <= 0) continue;
 
-         const float friction = combine_friction(sa.friction, sb.friction);
-         const int max_cp = config_.max_contacts_per_pair;
-         int to_add = std::min(num_contacts, max_cp);
+        const float friction = combine_friction(sa.friction, sb.friction);
+        const int max_cp = config_.max_contacts_per_pair;
+        int to_add = std::min(num_contacts, max_cp);
 
-         for (int k = 0; k < to_add; ++k) {
-             const auto& pt = vbd_points[k];
-             AvbdContact ac;
-             ac.body_a = ia;
-             ac.body_b = ib;
-             ac.rA = pt.rA;
-             ac.rB = pt.rB;
-             ac.basis = basis;
-             ac.friction = friction;
-             ac.feature_id = pt.feature_key;
+        for (int k = 0; k < to_add; ++k) {
+            const auto& pt = vbd_points[k];
+            AvbdContact ac;
+            ac.body_a = ia;
+            ac.body_b = ib;
+            ac.rA = pt.rA;
+            ac.rB = pt.rB;
+            ac.basis = basis;
+            ac.friction = friction;
+            ac.feature_id = pt.feature_key;
 
-             uint64_t k_new = contact_key(ac);
-             auto it = old_cache.find(k_new);
-             if (it != old_cache.end()) {
-                 ac.penalty = it->second.penalty;
-                 ac.lambda = it->second.lambda;
-                 ac.stick = it->second.stick;
-                 if (ac.stick) {
-                     ac.rA = it->second.rA;
-                     ac.rB = it->second.rB;
-                 }
-             } else {
-                 ac.penalty = Vec3f(PENALTY_MIN, PENALTY_MIN, PENALTY_MIN);
-             }
+            uint64_t k_new = contact_key(ac);
+            auto it = old_cache.find(k_new);
+            if (it != old_cache.end()) {
+                ac.penalty = it->second.penalty;
+                ac.lambda = it->second.lambda;
+                ac.stick = it->second.stick;
+                if (ac.stick) {
+                    ac.rA = it->second.rA;
+                    ac.rB = it->second.rB;
+                }
+            } else {
+                ac.penalty = Vec3f(PENALTY_MIN, PENALTY_MIN, PENALTY_MIN);
+            }
 
-             Vec3f xA = !valid_a ? ac.rA : state.transforms[ia].transform_point(ac.rA);
-             Vec3f xB = !valid_b ? ac.rB : state.transforms[ib].transform_point(ac.rB);
-             ac.C0 = ac.basis * (xA - xB) + Vec3f(COLLISION_MARGIN, 0, 0);
+            Vec3f xA = !valid_a ? ac.rA : state.transforms[ia].transform_point(ac.rA);
+            Vec3f xB = !valid_b ? ac.rB : state.transforms[ib].transform_point(ac.rB);
+            ac.C0 = ac.basis * (xA - xB) + Vec3f(COLLISION_MARGIN, 0, 0);
 
-             ac.lambda = ac.lambda * config_.alpha * config_.gamma;
-             ac.penalty.x() = clampf(ac.penalty.x() * config_.gamma, PENALTY_MIN, PENALTY_MAX);
-             ac.penalty.y() = clampf(ac.penalty.y() * config_.gamma, PENALTY_MIN, PENALTY_MAX);
-             ac.penalty.z() = clampf(ac.penalty.z() * config_.gamma, PENALTY_MIN, PENALTY_MAX);
+            ac.lambda = ac.lambda * config_.alpha * config_.gamma;
+            ac.penalty.x() = clampf(ac.penalty.x() * config_.gamma, PENALTY_MIN, PENALTY_MAX);
+            ac.penalty.y() = clampf(ac.penalty.y() * config_.gamma, PENALTY_MIN, PENALTY_MAX);
+            ac.penalty.z() = clampf(ac.penalty.z() * config_.gamma, PENALTY_MIN, PENALTY_MAX);
 
-             avbd_contacts_.push_back(ac);
-         }
-     }
+            avbd_contacts_out.push_back(ac);
+        }
+    }
 
-     constexpr float Q_ANCHOR = 0.01f;
-     auto qv = [&](const Vec3f& v) {
-         return std::tuple<int, int, int>(
-             quantize_float(v.x(), Q_ANCHOR),
-             quantize_float(v.y(), Q_ANCHOR),
-             quantize_float(v.z(), Q_ANCHOR));
-     };
-     std::sort(avbd_contacts_.begin(), avbd_contacts_.end(),
-              [&](const AvbdContact& a, const AvbdContact& b) {
+    constexpr float Q_ANCHOR = 0.01f;
+    auto qv = [](float x, float y, float z) {
+        return std::tuple<int, int, int>(
+            quantize_float(x, Q_ANCHOR),
+            quantize_float(y, Q_ANCHOR),
+            quantize_float(z, Q_ANCHOR));
+    };
+    std::sort(avbd_contacts_out.begin(), avbd_contacts_out.end(),
+              [&qv](const AvbdContact& a, const AvbdContact& b) {
                   const int a0 = std::min(a.body_a, a.body_b);
                   const int a1 = std::max(a.body_a, a.body_b);
                   const int b0 = std::min(b.body_a, b.body_b);
@@ -300,12 +281,267 @@ constexpr float STICK_THRESH = 0.00001f;
                   if (a1 != b1) return a1 < b1;
                   if (a.feature_id != b.feature_id) return a.feature_id < b.feature_id;
                   if (a.stick != b.stick) return a.stick < b.stick;
-                  auto arA = qv(a.rA), arB = qv(a.rB);
-                  auto brA = qv(b.rA), brB = qv(b.rB);
+                  auto arA = qv(a.rA.x(), a.rA.y(), a.rA.z()), arB = qv(a.rB.x(), a.rB.y(), a.rB.z());
+                  auto brA = qv(b.rA.x(), b.rA.y(), b.rA.z()), brB = qv(b.rB.x(), b.rB.y(), b.rB.z());
                   if (arA != brA) return arA < brA;
                   return arB < brB;
               });
- }
+}
+
+}  // namespace
+
+void VbdSolver::build_contact_constraints(const Model& model, const SimState& state) {
+    const int num_shapes = model.num_shapes();
+    std::vector<AABB> shape_aabbs(num_shapes);
+    std::vector<bool> shape_static(num_shapes);
+
+    // Reuse hash tables to avoid per-step allocations/rehash hitches.
+    static thread_local std::unordered_map<uint64_t, bool> ignore_pair;
+    ignore_pair.clear();
+    ignore_pair.reserve(ignore_collisions_.size() * 2 + 8);
+    for (const auto& ic : ignore_collisions_) {
+        if (ic.body_a >= 0 && ic.body_b >= 0)
+            ignore_pair[pair_key(ic.body_a, ic.body_b)] = true;
+    }
+
+    static thread_local std::unordered_map<uint64_t, WarmstartContactData> old_cache;
+    old_cache.clear();
+    old_cache.reserve(avbd_contacts_.size() * 2 + 8);
+    for (const AvbdContact& oldc : avbd_contacts_) {
+        WarmstartContactData d;
+        d.rA = oldc.rA;
+        d.rB = oldc.rB;
+        d.penalty = oldc.penalty;
+        d.lambda = oldc.lambda;
+        d.stick = oldc.stick;
+        old_cache[contact_key(oldc)] = d;
+    }
+    avbd_contacts_.clear();
+
+    for (int si = 0; si < num_shapes; ++si) {
+        const auto& shape = model.shapes[si];
+        if (shape.body_index >= 0) {
+            shape_aabbs[si] = shape.compute_aabb(state.transforms[shape.body_index]);
+            shape_static[si] = model.bodies[shape.body_index].is_static();
+        } else {
+            shape_aabbs[si] = shape.compute_aabb(Transform::identity());
+            shape_static[si] = true;
+        }
+    }
+    broadphase_.update(shape_aabbs, shape_static);
+    build_contacts_for_shape_pairs(model, state, broadphase_.get_pairs(),
+                                  ignore_pair, old_cache, avbd_contacts_, config_);
+}
+
+void VbdSolver::build_contact_constraints_from_pairs(const Model& model, const SimState& state,
+                                                     const std::vector<std::pair<int, int>>& shape_pairs) {
+    static thread_local std::unordered_map<uint64_t, bool> ignore_pair;
+    ignore_pair.clear();
+    ignore_pair.reserve(ignore_collisions_.size() * 2 + 8);
+    for (const auto& ic : ignore_collisions_) {
+        if (ic.body_a >= 0 && ic.body_b >= 0)
+            ignore_pair[pair_key(ic.body_a, ic.body_b)] = true;
+    }
+
+    static thread_local std::unordered_map<uint64_t, WarmstartContactData> old_cache;
+    old_cache.clear();
+    old_cache.reserve(avbd_contacts_.size() * 2 + 8);
+    for (const AvbdContact& oldc : avbd_contacts_) {
+        WarmstartContactData d;
+        d.rA = oldc.rA;
+        d.rB = oldc.rB;
+        d.penalty = oldc.penalty;
+        d.lambda = oldc.lambda;
+        d.stick = oldc.stick;
+        old_cache[contact_key(oldc)] = d;
+    }
+    avbd_contacts_.clear();
+
+    std::vector<BroadPhasePair> pairs;
+    pairs.reserve(shape_pairs.size());
+    for (const auto& p : shape_pairs) {
+        int a = std::min(p.first, p.second);
+        int b = std::max(p.first, p.second);
+        if (a != b)
+            pairs.push_back({a, b});
+    }
+    std::sort(pairs.begin(), pairs.end(), [](const BroadPhasePair& x, const BroadPhasePair& y) {
+        return x.body_a < y.body_a || (x.body_a == y.body_a && x.body_b < y.body_b);
+    });
+    pairs.erase(std::unique(pairs.begin(), pairs.end()), pairs.end());
+
+    build_contacts_for_shape_pairs(model, state, pairs, ignore_pair, old_cache, avbd_contacts_, config_);
+}
+
+void VbdSolver::build_contact_constraints_from_raw_contacts(const Model& model, const SimState& state,
+                                                          const std::vector<RawContactHost>& raw_contacts) {
+    build_contact_constraints_from_raw_contacts(model, state, std::span<const RawContactHost>(raw_contacts.data(), raw_contacts.size()));
+}
+
+void VbdSolver::build_contact_constraints_from_raw_contacts(const Model& model, const SimState& state,
+                                                          std::span<const RawContactHost> raw_contacts) {
+    const int n = model.num_bodies();
+    static thread_local std::unordered_map<uint64_t, bool> ignore_pair;
+    ignore_pair.clear();
+    ignore_pair.reserve(ignore_collisions_.size() * 2 + 8);
+    for (const auto& ic : ignore_collisions_) {
+        if (ic.body_a >= 0 && ic.body_b >= 0)
+            ignore_pair[pair_key(ic.body_a, ic.body_b)] = true;
+    }
+
+    static thread_local std::unordered_map<uint64_t, WarmstartContactData> old_cache;
+    old_cache.clear();
+    old_cache.reserve(avbd_contacts_.size() * 2 + 8);
+    for (const AvbdContact& oldc : avbd_contacts_) {
+        WarmstartContactData d;
+        d.rA = oldc.rA;
+        d.rB = oldc.rB;
+        d.penalty = oldc.penalty;
+        d.lambda = oldc.lambda;
+        d.stick = oldc.stick;
+        old_cache[contact_key(oldc)] = d;
+    }
+    avbd_contacts_.clear();
+
+    for (const auto& rc : raw_contacts) {
+        int ia = rc.body_a;
+        int ib = rc.body_b;
+        bool valid_a = (ia >= 0 && ia < n);
+        bool valid_b = (ib >= 0 && ib < n);
+        if (valid_a && valid_b && ignore_pair.find(pair_key(ia, ib)) != ignore_pair.end())
+            continue;
+
+        AvbdContact ac;
+        ac.body_a = ia;
+        ac.body_b = ib;
+        ac.rA = Vec3f(rc.rA[0], rc.rA[1], rc.rA[2]);
+        ac.rB = Vec3f(rc.rB[0], rc.rB[1], rc.rB[2]);
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 3; ++c)
+                ac.basis(r, c) = rc.basis[r * 3 + c];
+        ac.friction = rc.friction;
+        ac.feature_id = rc.feature_id;
+
+        uint64_t k_new = contact_key(ac);
+        auto it = old_cache.find(k_new);
+        if (it != old_cache.end()) {
+            ac.penalty = it->second.penalty;
+            ac.lambda = it->second.lambda;
+            ac.stick = it->second.stick;
+            if (ac.stick) {
+                ac.rA = it->second.rA;
+                ac.rB = it->second.rB;
+            }
+        } else {
+            ac.penalty = Vec3f(PENALTY_MIN, PENALTY_MIN, PENALTY_MIN);
+        }
+
+        Vec3f xA = !valid_a ? ac.rA : state.transforms[ia].transform_point(ac.rA);
+        Vec3f xB = !valid_b ? ac.rB : state.transforms[ib].transform_point(ac.rB);
+        ac.C0 = ac.basis * (xA - xB) + Vec3f(COLLISION_MARGIN, 0, 0);
+
+        ac.lambda = ac.lambda * config_.alpha * config_.gamma;
+        ac.penalty.x() = clampf(ac.penalty.x() * config_.gamma, PENALTY_MIN, PENALTY_MAX);
+        ac.penalty.y() = clampf(ac.penalty.y() * config_.gamma, PENALTY_MIN, PENALTY_MAX);
+        ac.penalty.z() = clampf(ac.penalty.z() * config_.gamma, PENALTY_MIN, PENALTY_MAX);
+
+        avbd_contacts_.push_back(ac);
+    }
+
+    constexpr float Q_ANCHOR = 0.01f;
+    auto qv = [](float x, float y, float z) {
+        return std::tuple<int, int, int>(
+            quantize_float(x, Q_ANCHOR),
+            quantize_float(y, Q_ANCHOR),
+            quantize_float(z, Q_ANCHOR));
+    };
+    std::sort(avbd_contacts_.begin(), avbd_contacts_.end(),
+              [&qv](const AvbdContact& a, const AvbdContact& b) {
+                  const int a0 = std::min(a.body_a, a.body_b);
+                  const int a1 = std::max(a.body_a, a.body_b);
+                  const int b0 = std::min(b.body_a, b.body_b);
+                  const int b1 = std::max(b.body_a, b.body_b);
+                  if (a0 != b0) return a0 < b0;
+                  if (a1 != b1) return a1 < b1;
+                  if (a.feature_id != b.feature_id) return a.feature_id < b.feature_id;
+                  if (a.stick != b.stick) return a.stick < b.stick;
+                  auto arA = qv(a.rA.x(), a.rA.y(), a.rA.z()), arB = qv(a.rB.x(), a.rB.y(), a.rB.z());
+                  auto brA = qv(b.rA.x(), b.rA.y(), b.rA.z()), brB = qv(b.rB.x(), b.rB.y(), b.rB.z());
+                  if (arA != brA) return arA < brA;
+                  return arB < brB;
+              });
+}
+
+void VbdSolver::build_contact_constraints_from_raw_contacts_warmstart(const Model& model, const SimState& state,
+                                                                      std::span<const RawContactHostWarmstart> raw_warmstart) {
+    const int n = model.num_bodies();
+    static thread_local std::unordered_map<uint64_t, bool> ignore_pair;
+    ignore_pair.clear();
+    ignore_pair.reserve(ignore_collisions_.size() * 2 + 8);
+    for (const auto& ic : ignore_collisions_) {
+        if (ic.body_a >= 0 && ic.body_b >= 0)
+            ignore_pair[pair_key(ic.body_a, ic.body_b)] = true;
+    }
+    avbd_contacts_.clear();
+
+    for (const auto& rw : raw_warmstart) {
+        const RawContactHost& rc = rw.base;
+        int ia = rc.body_a;
+        int ib = rc.body_b;
+        bool valid_a = (ia >= 0 && ia < n);
+        bool valid_b = (ib >= 0 && ib < n);
+        if (valid_a && valid_b && ignore_pair.find(pair_key(ia, ib)) != ignore_pair.end())
+            continue;
+
+        AvbdContact ac;
+        ac.body_a = ia;
+        ac.body_b = ib;
+        ac.rA = Vec3f(rc.rA[0], rc.rA[1], rc.rA[2]);
+        ac.rB = Vec3f(rc.rB[0], rc.rB[1], rc.rB[2]);
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 3; ++c)
+                ac.basis(r, c) = rc.basis[r * 3 + c];
+        ac.friction = rc.friction;
+        ac.feature_id = rc.feature_id;
+        ac.lambda = Vec3f(rw.lambda[0], rw.lambda[1], rw.lambda[2]);
+        ac.penalty = Vec3f(rw.penalty[0], rw.penalty[1], rw.penalty[2]);
+        ac.stick = (rw.stick != 0);
+
+        Vec3f xA = !valid_a ? ac.rA : state.transforms[ia].transform_point(ac.rA);
+        Vec3f xB = !valid_b ? ac.rB : state.transforms[ib].transform_point(ac.rB);
+        ac.C0 = ac.basis * (xA - xB) + Vec3f(COLLISION_MARGIN, 0, 0);
+
+        ac.lambda = ac.lambda * config_.alpha * config_.gamma;
+        ac.penalty.x() = clampf(ac.penalty.x() * config_.gamma, PENALTY_MIN, PENALTY_MAX);
+        ac.penalty.y() = clampf(ac.penalty.y() * config_.gamma, PENALTY_MIN, PENALTY_MAX);
+        ac.penalty.z() = clampf(ac.penalty.z() * config_.gamma, PENALTY_MIN, PENALTY_MAX);
+
+        avbd_contacts_.push_back(ac);
+    }
+
+    constexpr float Q_ANCHOR = 0.01f;
+    auto qv = [](float x, float y, float z) {
+        return std::tuple<int, int, int>(
+            quantize_float(x, Q_ANCHOR),
+            quantize_float(y, Q_ANCHOR),
+            quantize_float(z, Q_ANCHOR));
+    };
+    std::sort(avbd_contacts_.begin(), avbd_contacts_.end(),
+              [&qv](const AvbdContact& a, const AvbdContact& b) {
+                  const int a0 = std::min(a.body_a, a.body_b);
+                  const int a1 = std::max(a.body_a, a.body_b);
+                  const int b0 = std::min(b.body_a, b.body_b);
+                  const int b1 = std::max(b.body_a, b.body_b);
+                  if (a0 != b0) return a0 < b0;
+                  if (a1 != b1) return a1 < b1;
+                  if (a.feature_id != b.feature_id) return a.feature_id < b.feature_id;
+                  if (a.stick != b.stick) return a.stick < b.stick;
+                  auto arA = qv(a.rA.x(), a.rA.y(), a.rA.z()), arB = qv(a.rB.x(), a.rB.y(), a.rB.z());
+                  auto brA = qv(b.rA.x(), b.rA.y(), b.rA.z()), brB = qv(b.rB.x(), b.rB.y(), b.rB.z());
+                  if (arA != brA) return arA < brA;
+                  return arB < brB;
+              });
+}
 
  namespace {
  inline Mat3f diagonalize(const Mat3f& m) {
@@ -680,7 +916,15 @@ constexpr float STICK_THRESH = 0.00001f;
      }
  }
  
- void VbdSolver::step(const Model& model, SimState& state) {
+void VbdSolver::step(const Model& model, SimState& state) {
+    // Dispatch to the selected backend. CUDA backend is implemented in
+    // vbd_solver_cuda.cu and currently mirrors the CPU path while we bring
+    // kernels online incrementally.
+    if (config_.backend == VbdBackend::CUDA) {
+        step_cuda(model, state);
+        return;
+    }
+
      const float dt = config_.dt;
      const Vec3f gravity = config_.gravity;
      const int n = model.num_bodies();

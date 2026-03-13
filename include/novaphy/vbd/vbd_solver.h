@@ -12,6 +12,8 @@
 #include "novaphy/vbd/vbd_forces.h"
 
 #include <limits>
+#include <span>
+#include <utility>
 #include <vector>
 
 namespace novaphy {
@@ -49,6 +51,7 @@ struct AvbdContact {
 class VbdSolver {
 public:
     explicit VbdSolver(const VBDConfig& cfg);
+    ~VbdSolver();
 
     void set_config(const VBDConfig& cfg);
     const VBDConfig& config() const { return config_; }
@@ -73,13 +76,50 @@ public:
     void step(const Model& model, SimState& state);
 
 private:
+    /// CPU path: build contacts, run AVBD on host.
     /** Build contacts at step start and initialize C0 + warmstart lambda/penalty. */
     void build_contact_constraints(const Model& model, const SimState& state);
+
+    /** Build contacts from a given list of shape-index pairs (for GPU broadphase path). */
+    void build_contact_constraints_from_pairs(const Model& model, const SimState& state,
+                                             const std::vector<std::pair<int, int>>& shape_pairs);
+
+    /** Raw contact from GPU narrowphase (body_a, body_b, rA, rB, basis, friction, feature_id). */
+    struct RawContactHost {
+        int body_a = -1;
+        int body_b = -1;
+        float rA[3] = {};
+        float rB[3] = {};
+        float basis[9] = {};
+        float friction = 0.5f;
+        int feature_id = 0;
+    };
+    /** Raw contact with warmstart data (lambda, penalty, stick) filled on GPU. Same layout as device RawContactWarmstart. */
+    struct RawContactHostWarmstart {
+        RawContactHost base;
+        float lambda[3] = {};
+        float penalty[3] = {};
+        int stick = 0;
+    };
+    /** Build contacts from GPU narrowphase output (warmstart + C0 + sort). */
+    void build_contact_constraints_from_raw_contacts(const Model& model, const SimState& state,
+                                                    const std::vector<RawContactHost>& raw_contacts);
+    /** Span-based overload to avoid per-step allocations in CUDA path. */
+    void build_contact_constraints_from_raw_contacts(const Model& model, const SimState& state,
+                                                    std::span<const RawContactHost> raw_contacts);
+    /** Build contacts from GPU narrowphase + GPU warmstart; no old_cache, only C0 + scale + sort. */
+    void build_contact_constraints_from_raw_contacts_warmstart(const Model& model, const SimState& state,
+                                                               std::span<const RawContactHostWarmstart> raw_warmstart);
 
     /** Main loop primal: assemble per-body 6x6 LHS/RHS, solve and apply dq. */
     void avbd_primal(const Model& model, SimState& state);
     /** Main loop dual: update lambda and penalty. */
     void avbd_dual(const Model& model, const SimState& state);
+
+    /// CUDA path entry point (implemented in vbd_solver_cuda.cu).
+    void step_cuda(const Model& model, SimState& state);
+    /// Frees persistent CUDA device buffers (called from destructor); no-op if not using CUDA.
+    void release_cuda_buffers();
 
     VBDConfig config_;
     SweepAndPrune broadphase_;

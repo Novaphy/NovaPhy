@@ -10,6 +10,13 @@ namespace py = pybind11;
 void bind_vbd(py::module_& m) {
     using namespace novaphy;
 
+    py::enum_<VbdBackend>(m, "VbdBackend", R"pbdoc(
+        Backend selection for the VBD/AVBD solver.
+    )pbdoc")
+        .value("CPU", VbdBackend::CPU)
+        .value("CUDA", VbdBackend::CUDA)
+        .export_values();
+
     py::class_<VBDConfig>(m, "VBDConfig", R"pbdoc(
         VBD/AVBD configuration aligned with avbd-demo3d (dt/gravity/iterations/alpha/gamma/beta_*).
     )pbdoc")
@@ -28,6 +35,8 @@ void bind_vbd(py::module_& m) {
         .def_readwrite("velocity_smoothing", &VBDConfig::velocity_smoothing)
         .def_readwrite("primal_relaxation", &VBDConfig::primal_relaxation)
         .def_readwrite("lhs_regularization", &VBDConfig::lhs_regularization)
+        .def_readwrite("backend", &VBDConfig::backend,
+            "Backend selection for the AVBD solver (CPU or CUDA).")
         .def("__repr__", [](const VBDConfig& c) {
             return "<VBDConfig dt=" + std::to_string(c.dt) +
                    " iterations=" + std::to_string(c.iterations) + ">";

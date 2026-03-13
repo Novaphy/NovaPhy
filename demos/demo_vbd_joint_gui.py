@@ -6,10 +6,13 @@ Scene switching fully clears Polyscope structures to avoid leftovers.
 
 import os
 import sys
+import argparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import novaphy
+
+_BACKEND = "cpu"
 
 try:
     import polyscope as ps
@@ -48,6 +51,10 @@ def _make_world(model):
     cfg.beta_angular = 100.0
     cfg.primal_relaxation = 0.9
     cfg.lhs_regularization = 1e-6
+    if _BACKEND.lower() == "cuda":
+        cfg.backend = novaphy.VbdBackend.CUDA
+    else:
+        cfg.backend = novaphy.VbdBackend.CPU
     return novaphy.VBDWorld(model, cfg)
 
 
@@ -112,7 +119,7 @@ def build_scene(name: str):
         _static_box(b, (100, 1, 100), 0.5, (0, 0.0, 0))
         N, M = 10, 5
         # Less fragile than demo3d default (90): easier to observe impacts before fracture.
-        break_force = 150.0
+        break_force = 140.0
         prev = None
         for i in range(N + 1):
             curr = _box(b, (1, 0.5, 1), 1.0, 0.5, (i - N / 2.0, 6.0, 0.0))
@@ -123,7 +130,7 @@ def build_scene(name: str):
         _static_box(b, (1, 5, 1), 0.5, (N / 2.0, 2.5, 0.0))
         # Stack 4 blocks vertically (like demo3d), so they drop as a pile.
         base_y = 8.0
-        for i in range(4):
+        for i in range(5):
             _box(b, (2, 1, 1), 1.0, 0.5, (0.0, base_y + i * 1.01, 0.0))
 
     elif name == "soft_body":
@@ -280,5 +287,9 @@ def main():
 
 
 if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description="VBD joint scenes (rope, bridge, etc.)")
+    ap.add_argument("--backend", default="cuda", choices=("cpu", "cuda"), help="VBD solver backend")
+    args = ap.parse_args()
+    _BACKEND = args.backend
     main()
 

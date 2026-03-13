@@ -7,6 +7,11 @@ namespace novaphy {
 /**
  * @brief VBD/AVBD configuration, aligned with avbd-demo3d solver parameters.
  */
+enum class VbdBackend : int {
+    CPU = 0,   ///< Run AVBD on CPU (current default implementation).
+    CUDA = 1,  ///< Run AVBD on a CUDA backend (experimental).
+};
+
 struct VBDConfig {
     float dt = 1.0f / 60.0f;
     Vec3f gravity = Vec3f(0.0f, -9.81f, 0.0f);
@@ -33,6 +38,9 @@ struct VBDConfig {
     float primal_relaxation = 1.0f;
     /// Small diagonal regularization added to 6x6 LHS before solve (improves conditioning, reduces numerical jitter).
     float lhs_regularization = 1e-6f;
+
+    /// Backend selection for the AVBD solver. CPU is the default; CUDA is experimental.
+    VbdBackend backend = VbdBackend::CPU;
 };
 
 }  // namespace novaphy

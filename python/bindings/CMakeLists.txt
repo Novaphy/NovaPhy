@@ -40,3 +40,9 @@ target_compile_definitions(_core PRIVATE
 )
 
 install(TARGETS _core DESTINATION novaphy)
+
+# Ensure the VBD/AVBD shared library is installed next to the Python module
+# so that the dynamic loader can resolve it when importing novaphy._core.
+if(TARGET novaphy_vbd)
+    install(TARGETS novaphy_vbd DESTINATION novaphy)
+endif()

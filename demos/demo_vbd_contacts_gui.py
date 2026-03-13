@@ -6,6 +6,8 @@ Scene switching fully clears Polyscope structures to avoid leftovers.
 
 import os
 import sys
+import argparse
+import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
@@ -17,6 +19,11 @@ try:
     HAS_POLYSCOPE = True
 except ImportError:
     HAS_POLYSCOPE = False
+
+
+# Global backend selector for VBDWorld used in this demo.
+# Can be overridden via command-line argument.
+_BACKEND = "cpu"
 
 
 def _box(builder, full_size, density, friction, pos):
@@ -50,6 +57,11 @@ def _make_world(model):
     cfg.beta_angular = 100.0
     cfg.primal_relaxation = 0.9
     cfg.lhs_regularization = 1e-6
+    # Select backend based on global switch.
+    if _BACKEND.lower() == "cuda":
+        cfg.backend = novaphy.VbdBackend.CUDA
+    else:
+        cfg.backend = novaphy.VbdBackend.CPU
     return novaphy.VBDWorld(model, cfg)
 
 
@@ -151,9 +163,82 @@ class _Adapter:
         self._w.step()
 
 
+def _run_headless_compare(scene: str = "pyramid", steps: int = 300):
+    """Headless CPU vs CUDA comparison for a given scene.
+
+    Runs the same scene with CPU and CUDA backends and prints basic
+    trajectory statistics to the console.
+    """
+
+    def _run_once(backend: str, collect_all=True):
+        global _BACKEND
+        old = _BACKEND
+        _BACKEND = backend
+        world = build_scene(scene)
+        _BACKEND = old
+
+        ys = []
+        model = world.model
+        t0 = time.perf_counter()
+        for i in range(steps):
+            world.step()
+            st = world.state
+            ys.append([st.transforms[b].position[1] for b in range(model.num_bodies)])
+        elapsed = time.perf_counter() - t0
+        ms_per_step = (elapsed / steps) * 1000.0
+        fps = steps / elapsed if elapsed > 0 else 0.0
+        print(f"  [{backend}] {elapsed:.2f}s total, {ms_per_step:.1f} ms/step, {fps:.1f} FPS")
+        return np.asarray(ys, dtype=np.float32), elapsed
+
+    print(f"[VBD contact scene: {scene}] steps={steps}")
+    ys_cpu, _ = _run_once("cpu")
+    ys_cuda, _ = _run_once("cuda")
+
+    if ys_cpu.shape != ys_cuda.shape:
+        print("CPU/CUDA shapes differ:", ys_cpu.shape, ys_cuda.shape)
+        return
+
+    diff = np.abs(ys_cpu - ys_cuda)
+    print("  bodies:", ys_cpu.shape[1])
+    print("  max abs position diff (all steps):", float(diff.max()))
+    print("  mean abs position diff:", float(diff.mean()))
+    # Show when divergence starts (sample at step 0, 1, 9, 49 to see early vs late).
+    for step_idx in [0, 1, 9, 49]:
+        if step_idx < diff.shape[0]:
+            d = diff[step_idx]
+            print(f"  at step {step_idx}: max_diff={float(d.max()):.6f}, mean_diff={float(d.mean()):.6f}")
+
+
 def main():
+    parser = argparse.ArgumentParser(description="VBD contact scenes (GUI/headless compare)")
+    parser.add_argument(
+        "--backend",
+        choices=["cpu", "cuda"],
+        default="cuda",
+        help="Backend for VBD solver used in GUI mode.",
+    )
+    parser.add_argument(
+        "--headless-compare",
+        action="store_true",
+        help="Run a headless CPU vs CUDA comparison (no GUI) on the pyramid scene.",
+    )
+    parser.add_argument(
+        "--scene",
+        choices=["ground", "dynamic_friction", "static_friction", "stack", "stack_ratio", "pyramid"],
+        default="ground",
+        help="Scene name for headless comparison.",
+    )
+    args, _ = parser.parse_known_args()
+
+    if args.headless_compare:
+        _run_headless_compare(scene=args.scene, steps=300)
+        return
+
     if not HAS_POLYSCOPE:
         raise RuntimeError("polyscope not installed")
+
+    global _BACKEND
+    _BACKEND = args.backend
 
     scenes = ["ground", "dynamic_friction", "static_friction", "stack", "stack_ratio", "pyramid"]
     state = {
@@ -165,6 +250,10 @@ def main():
         "viz": None,
         "status": "",
         "last_scene_idx": None,
+        "frame_times": [],  # rolling window of step durations (seconds)
+        "max_frame_times": 60,
+        "warmup_steps": 2,  # run a few untimed steps after rebuild (CUDA context/JIT)
+        "target_fps": 60,
     }
 
     ps.init()
@@ -193,6 +282,9 @@ def main():
         state["w"] = _Adapter(world)
         state["viz"] = SceneVisualizer(state["w"], 30.0)
         state["need_rebuild"] = False
+        # Reset timing window on rebuild/reset; first CUDA step can include context/JIT overhead.
+        state["frame_times"].clear()
+        state["warmup_steps"] = 2
         # Do not touch camera here; preserve user view. Camera preset is applied only when switching scenes
         # (first entry) or when user clicks the button.
         if state["last_scene_idx"] != state["scene_idx"]:
@@ -233,9 +325,35 @@ def main():
             rebuild()
 
         if not state["paused"] or state["step_once"]:
+            t0 = time.perf_counter()
             state["w"].step(0.0)
+            elapsed = time.perf_counter() - t0
+            if state.get("warmup_steps", 0) > 0:
+                state["warmup_steps"] -= 1
+            else:
+                ft = state["frame_times"]
+                ft.append(elapsed)
+                if len(ft) > state["max_frame_times"]:
+                    ft.pop(0)
             state["step_once"] = False
+
+            # Cap to ~60 FPS so frame time is predictable and system isn't maxed (reduces stutter)
+            target_fps = state.get("target_fps", 60)
+            if target_fps > 0 and not state["paused"]:
+                frame_budget = 1.0 / float(target_fps)
+                sleep_time = frame_budget - elapsed
+                if sleep_time > 0.001:  # sleep at least 1ms to avoid busy spin
+                    time.sleep(sleep_time)
+
         state["viz"].update()
+
+        # FPS / frame time (ms) from rolling window; show max to spot hitches
+        ft = state["frame_times"]
+        if ft:
+            avg_ms = (sum(ft) / len(ft)) * 1000.0
+            max_ms = max(ft) * 1000.0
+            fps = 1.0 / (sum(ft) / len(ft)) if ft else 0.0
+            psim.TextUnformatted(f"step: {avg_ms:.1f} ms (max {max_ms:.0f} ms)  |  FPS: {fps:.1f}")
 
     ps.set_user_callback(cb)
     ps.show()

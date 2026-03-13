@@ -5,10 +5,13 @@ Scene switching fully clears Polyscope structures to avoid leftovers.
 
 import os
 import sys
+import argparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import novaphy
+
+_BACKEND = "cpu"
 
 try:
     import polyscope as ps
@@ -47,6 +50,10 @@ def _make_world(model):
     cfg.beta_angular = 100.0
     cfg.primal_relaxation = 0.9
     cfg.lhs_regularization = 1e-6
+    if _BACKEND.lower() == "cuda":
+        cfg.backend = novaphy.VbdBackend.CUDA
+    else:
+        cfg.backend = novaphy.VbdBackend.CPU
     return novaphy.VBDWorld(model, cfg)
 
 
@@ -197,5 +204,9 @@ def main():
 
 
 if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description="VBD spring scenes")
+    ap.add_argument("--backend", default="cuda", choices=("cpu", "cuda"), help="VBD solver backend")
+    args = ap.parse_args()
+    _BACKEND = args.backend
     main()
 
