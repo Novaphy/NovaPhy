@@ -57,6 +57,10 @@ jobs:
   build-self-hosted:
     runs-on: [self-hosted, linux, x64]
     
+    env:
+      CUDA_ROOT: /usr/local/cuda-12.8
+      VCPKG_ROOT: ~/vcpkg    
+    
     defaults:
       run:
         shell: bash -el {0}
