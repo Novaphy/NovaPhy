@@ -56,29 +56,31 @@ jobs:
 
   build-self-hosted:
     runs-on: [self-hosted, linux, x64]
-
+    
+    defaults:
+      run:
+        shell: bash -el {0}
+    
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-      - name: Configure CMake with IPC and CUDA
-        shell: bash
+      - name: Configure standalone CMake with CUDA
         run: |
           cmake -S . -B build/standalone \
             -DCMAKE_BUILD_TYPE=Release \
             -DNOVAPHY_WITH_IPC=ON \
             -DCMAKE_CUDA_COMPILER=$CUDA_ROOT/bin/nvcc \
-            -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake \
+            -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
 
       - name: Build standalone CMake
-        shell: bash
         run: cmake --build build/standalone --config Release --parallel 4
 
       - name: Run C++ tests
-        shell: bash
         run: ctest --test-dir build/standalone -C Release --output-on-failure
 
       - name: Setup conda environment
-        shell: bash
         run: |
           if conda env list | grep -q "novaphy"; then
             echo "Updating environment..."
@@ -89,13 +91,11 @@ jobs:
           fi
       
       - name: Build and install Python package
-        shell: bash
         run: |
           conda activate novaphy
           CMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake pip install -e .
 
       - name: Run Python tests
-        shell: bash
         run: |
           conda activate novaphy
           pytest tests/python/ -v
