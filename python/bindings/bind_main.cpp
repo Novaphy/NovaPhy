@@ -12,7 +12,7 @@ void bind_sim(py::module_& m);
 void bind_dynamics(py::module_& m);
 void bind_fluid(py::module_& m);
 
-#ifdef NOVAPHY_WITH_IPC
+#if NOVAPHY_WITH_IPC
 void bind_ipc(py::module_& m);
 #endif
 
@@ -46,7 +46,7 @@ PYBIND11_MODULE(_core, m) {
     bind_dynamics(m);
     bind_fluid(m);
 
-#ifdef NOVAPHY_WITH_IPC
+#if NOVAPHY_WITH_IPC
     bind_ipc(m);
     m.def("has_ipc", []() { return true; }, "Returns True if IPC support is available.");
 #else

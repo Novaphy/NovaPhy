@@ -6,7 +6,7 @@
             "hidden": true,
             "description": "It set the common configure. DO NOT USE THIS PRESET DIRECTLY.",
             "cacheVariables": {
-                "CMAKE_TOOLCHAIN_FILE" : {
+                "CMAKE_TOOLCHAIN_FILE": {
                     "type": "FILEPATH",
                     "value": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
                 }
@@ -14,7 +14,7 @@
         },
         {
             "name": "default",
-            "binaryDir": "${sourceDir}/build",
+            "binaryDir": "${sourceDir}/build-release",
             "inherits": "base_configure",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release"
@@ -43,6 +43,13 @@
             "binaryDir": "${sourceDir}/build-ci",
             "inherits": "default",
             "toolchainFile": "$env{VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake"
+        },
+        {
+            "name": "ipc-ci",
+            "inherits": "default-ci",
+            "cacheVariables": {
+                "NOVAPHY_WITH_IPC": "ON"
+            }
         }
     ],
     "buildPresets": [
@@ -60,7 +67,31 @@
         },
         {
             "name": "default-ci",
-            "configurePreset": "default-ci"
+            "configurePreset": "default-ci",
+            "configuration": "Release"
+        },
+        {
+            "name": "ipc-ci",
+            "configurePreset": "ipc-ci",
+            "configuration": "Release"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "default-ci",
+            "configurePreset": "default-ci",
+            "configuration": "Release",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "ipc-ci",
+            "configurePreset": "ipc-ci",
+            "configuration": "Release",
+            "output": {
+                "outputOnFailure": true
+            }
         }
     ]
 }
